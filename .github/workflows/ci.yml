@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    env:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: test
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Poetry
+        run: pip install poetry==2.5.1
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: Lint with flake8
+        run: poetry run flake8 .
+
+      - name: Run tests with coverage
+        run: poetry run pytest --cov=app --cov-report=term-missing
