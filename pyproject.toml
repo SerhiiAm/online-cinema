@@ -36,3 +36,6 @@ dev = [
 asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+concurrency = ["greenlet", "thread"]
