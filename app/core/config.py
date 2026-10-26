@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
 
+    activation_token_expire_hours: int = 24
+
     @property
     def database_url(self) -> str:
         return (
