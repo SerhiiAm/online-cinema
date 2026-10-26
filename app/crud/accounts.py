@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
@@ -40,7 +41,7 @@ async def create_user(
 
     user = User(
         email=email.lower(),
-        hashed_password=hash_password(password),
+        hashed_password=await asyncio.to_thread(hash_password, password),
         group_id=group.id,
     )
     activation_token = ActivationToken(
