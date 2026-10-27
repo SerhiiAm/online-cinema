@@ -11,6 +11,8 @@ services:
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      SMTP_HOST: mailpit
     ports:
       - "8000:8000"
     volumes:
@@ -18,6 +20,8 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   db:

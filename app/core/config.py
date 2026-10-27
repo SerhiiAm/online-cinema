@@ -15,6 +15,14 @@ class Settings(BaseSettings):
 
     activation_token_expire_hours: int = 24
 
+    redis_url: str = "redis://127.0.0.1:6379/0"
+
+    smtp_host: str = "127.0.0.1"
+    smtp_port: int = 1025
+    email_from: str = "noreply@online-cinema.local"
+
+    frontend_url: str = "http://localhost:3000"
+
     @property
     def database_url(self) -> str:
         return (
