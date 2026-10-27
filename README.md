@@ -25,20 +25,21 @@ docker compose exec app alembic upgrade head
 | `app` | FastAPI application |
 | `db` | PostgreSQL |
 | `redis` | Message broker for Celery |
-| `celery_worker` | Runs background tasks (sending emails) |
+| `celery_worker` | Runs background tasks (sending emails, deleting expired tokens) |
+| `celery_beat` | Puts periodic tasks into the queue on schedule |
 | `mailpit` | Fake SMTP server that catches all outgoing emails locally |
 
-Worker logs:
+Worker and beat logs:
 
 ```bash
-docker compose logs -f celery_worker
+docker compose logs -f celery_worker celery_beat
 ```
 
-Unlike `app`, the worker does not reload on code changes. Restart it after
-editing tasks:
+Unlike `app`, the worker and beat do not reload on code changes. Restart them
+after editing tasks or the schedule:
 
 ```bash
-docker compose restart celery_worker
+docker compose restart celery_worker celery_beat
 ```
 
 ## Running tests
@@ -72,6 +73,9 @@ poetry run uvicorn app.main:app --reload
 
 # in a second terminal
 poetry run celery -A app.core.celery_app worker --loglevel=info --pool=solo
+
+# in a third terminal (only needed for periodic tasks)
+poetry run celery -A app.core.celery_app beat --loglevel=info
 ```
 
 `--pool=solo` is needed on Windows, where Celery's default pool does not work.
@@ -101,6 +105,15 @@ To activate an account locally:
 The link in the email points to a frontend page (`FRONTEND_URL`), which is not
 part of this project, so use the token directly.
 
+Expired activation tokens are deleted every hour (at :00) by `celery_beat`.
+The user account stays, so the user can still request a new email via
+`/accounts/resend-activation`. To run the cleanup right away:
+
+```bash
+docker compose exec app celery -A app.core.celery_app call app.tasks.accounts.delete_expired_activation_tokens
+docker compose logs celery_worker | grep "expired activation tokens"
+```
+
 Full request and response schemas are available in Swagger.
 
 ## Project structure
@@ -119,7 +132,7 @@ tests/        pytest tests (mirrors the app/ structure)
 
 ## Planned features
 
-1. User registration and account activation — in progress (expired token cleanup pending)
+1. User registration and account activation — done
 2. JWT authentication and roles
 3. Password change and reset
 4. Movies: catalog and moderator CRUD
