@@ -78,3 +78,13 @@ async def refresh_activation_token(
     db.add(activation_token)
     await db.commit()
     return activation_token
+
+
+async def delete_expired_activation_tokens(db: AsyncSession) -> int:
+    result = await db.execute(
+        delete(ActivationToken).where(
+            ActivationToken.expires_at < datetime.now(timezone.utc)
+        )
+    )
+    await db.commit()
+    return result.rowcount
