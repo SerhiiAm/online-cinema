@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir poetry
+RUN pip install --no-cache-dir poetry==2.5.1
 
 COPY pyproject.toml poetry.lock ./
 RUN poetry install --no-root

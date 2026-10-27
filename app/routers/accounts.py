@@ -1,14 +1,17 @@
+import logging
 import secrets
 from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from kombu.exceptions import OperationalError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.crud import accounts as crud
+from app.models.accounts import User
 from app.schemas.accounts import (
     MessageResponse,
     ResendActivationRequest,
@@ -16,6 +19,9 @@ from app.schemas.accounts import (
     UserRegistrationRequest,
     UserRegistrationResponse,
 )
+from app.tasks.email import send_activation_email
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/accounts", tags=["Accounts"])
 
@@ -29,13 +35,22 @@ ALREADY_ACTIVE = "Account is already active."
 TOKEN_EXPIRED = "Activation token has expired. Request a new one."
 
 
+def queue_activation_email(user: User, token: str) -> None:
+    # The user is already saved, so a broker outage must not turn into a 500:
+    # the user can request a new email via /resend-activation.
+    try:
+        send_activation_email.delay(user.email, token)
+    except OperationalError:
+        logger.exception("Failed to queue activation email for user %s", user.id)
+
+
 @router.post(
     "/register",
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user",
     description=(
-        "Creates an inactive account in the `user` group and issues an "
-        f"activation token valid for {TOKEN_TTL_HOURS} hours. "
+        "Creates an inactive account in the `user` group and sends an "
+        f"activation email with a token valid for {TOKEN_TTL_HOURS} hours. "
         "The account must be activated "
         "via `POST /accounts/activate` before it can be used.\n\n"
         "Password requirements: at least 8 characters, one uppercase letter, "
@@ -54,11 +69,14 @@ async def register(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=EMAIL_TAKEN)
 
     try:
-        user, _ = await crud.create_user(db, data.email, data.password)
+        user, activation_token = await crud.create_user(
+            db, data.email, data.password
+        )
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=EMAIL_TAKEN)
 
+    queue_activation_email(user, activation_token.token)
     return UserRegistrationResponse.model_validate(user)
 
 
@@ -109,10 +127,11 @@ async def activate(data: UserActivationRequest, db: DbSession) -> MessageRespons
 
 @router.post(
     "/resend-activation",
-    summary="Resend the activation token",
+    summary="Resend the activation email",
     description=(
-        f"Issues a new activation token (valid for {TOKEN_TTL_HOURS} hours) "
-        "and invalidates the previous one. Always returns the same response, "
+        f"Issues a new activation token (valid for {TOKEN_TTL_HOURS} hours), "
+        "invalidates the previous one and sends it by email. "
+        "Always returns the same response, "
         "so it cannot be used to check whether an email is registered."
     ),
 )
@@ -121,7 +140,8 @@ async def resend_activation(
 ) -> MessageResponse:
     user = await crud.get_user_by_email(db, data.email)
     if user is not None and not user.is_active:
-        await crud.refresh_activation_token(db, user)
+        activation_token = await crud.refresh_activation_token(db, user)
+        queue_activation_email(user, activation_token.token)
 
     return MessageResponse(
         message=(
