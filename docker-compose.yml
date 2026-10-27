@@ -24,6 +24,26 @@ services:
       redis:
         condition: service_healthy
 
+  celery_worker:
+    build:
+      context: .
+    image: serhiiambartsumov/online-cinema:${TAG:-latest}
+    container_name: cinema_celery_worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      SMTP_HOST: mailpit
+    volumes:
+      - ./:/app
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
+    depends_on:
+      redis:
+        condition: service_healthy
+
   db:
     image: postgres:16
     container_name: cinema_db
