@@ -1,8 +1,10 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 from httpx import AsyncClient, Response
+from kombu.exceptions import OperationalError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,6 +171,41 @@ async def test_concurrent_registrations_create_single_user(
     assert await count_users(db_session) == 1
 
 
+async def test_register_sends_activation_email(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    send_activation_email_mock: MagicMock,
+) -> None:
+    await register(client)
+
+    token = await get_token(db_session)
+    send_activation_email_mock.assert_called_once_with(EMAIL, token.token)
+
+
+async def test_register_duplicate_email_does_not_send_email(
+    client: AsyncClient, send_activation_email_mock: MagicMock
+) -> None:
+    await register(client)
+    send_activation_email_mock.reset_mock()
+
+    await register(client)
+
+    send_activation_email_mock.assert_not_called()
+
+
+async def test_register_succeeds_when_broker_is_unavailable(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    send_activation_email_mock: MagicMock,
+) -> None:
+    send_activation_email_mock.side_effect = OperationalError("Redis is down")
+
+    response = await register(client)
+
+    assert response.status_code == 201
+    assert await get_user(db_session) is not None
+
+
 # --- POST /accounts/activate ---
 
 
@@ -284,3 +321,38 @@ async def test_resend_response_does_not_reveal_registered_emails(
 
     assert registered.status_code == unknown.status_code == 200
     assert registered.json() == unknown.json()
+
+
+async def test_resend_sends_email_with_new_token(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    activation_token: str,
+    send_activation_email_mock: MagicMock,
+) -> None:
+    send_activation_email_mock.reset_mock()
+
+    await resend(client)
+
+    new_token = await get_token(db_session)
+    send_activation_email_mock.assert_called_once_with(EMAIL, new_token.token)
+
+
+@pytest.mark.parametrize(
+    "activate_first, email",
+    [(True, EMAIL), (False, "nobody@example.com")],
+    ids=["active-user", "unknown-email"],
+)
+async def test_resend_does_not_send_email(
+    client: AsyncClient,
+    activation_token: str,
+    send_activation_email_mock: MagicMock,
+    activate_first: bool,
+    email: str,
+) -> None:
+    if activate_first:
+        await activate(client, activation_token)
+    send_activation_email_mock.reset_mock()
+
+    await resend(client, email=email)
+
+    send_activation_email_mock.assert_not_called()

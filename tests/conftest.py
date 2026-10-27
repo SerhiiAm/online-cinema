@@ -1,5 +1,6 @@
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -68,7 +69,16 @@ async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, Non
 
 
 @pytest.fixture
-async def client(db_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
+def send_activation_email_mock() -> Generator[MagicMock, None, None]:
+    # Replaces .delay so tests never need a running Redis.
+    with patch("app.routers.accounts.send_activation_email.delay") as mock:
+        yield mock
+
+
+@pytest.fixture
+async def client(
+    db_engine: AsyncEngine, send_activation_email_mock: MagicMock
+) -> AsyncGenerator[AsyncClient, None]:
     session_maker = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
