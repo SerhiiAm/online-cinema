@@ -1,1 +1,6 @@
-from app.models.accounts import ActivationToken, User, UserGroup  # noqa: F401
+from app.models.accounts import (  # noqa: F401
+    ActivationToken,
+    RefreshToken,
+    User,
+    UserGroup,
+)

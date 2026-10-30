@@ -39,6 +39,9 @@ class User(Base):
     activation_token: Mapped["ActivationToken | None"] = relationship(
         back_populates="user"
     )
+    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+        back_populates="user", passive_deletes=True
+    )
 
 
 class ActivationToken(Base):
@@ -51,3 +54,19 @@ class ActivationToken(Base):
     token: Mapped[str] = mapped_column(String(255), unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     user: Mapped[User] = relationship(back_populates="activation_token")
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    jti: Mapped[str] = mapped_column(String(32), unique=True)
+    revoked: Mapped[bool] = mapped_column(default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    user: Mapped[User] = relationship(back_populates="refresh_tokens")
