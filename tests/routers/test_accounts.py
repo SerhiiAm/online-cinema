@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import jwt
 import pytest
 from httpx import AsyncClient, Response
 from kombu.exceptions import OperationalError
@@ -9,7 +10,12 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.security import DUMMY_PASSWORD_HASH, TokenType, decode_token
+from app.core.security import (
+    DUMMY_PASSWORD_HASH,
+    TokenType,
+    create_refresh_token,
+    decode_token,
+)
 from app.models.accounts import (
     ActivationToken,
     RefreshToken,
@@ -23,6 +29,7 @@ from app.routers.accounts import (
     EMAIL_TAKEN,
     INVALID_ACTIVATION,
     INVALID_CREDENTIALS,
+    INVALID_REFRESH_TOKEN,
     TOKEN_EXPIRED,
 )
 
@@ -80,7 +87,19 @@ async def count_users(db: AsyncSession) -> int:
 
 
 async def get_refresh_tokens(db: AsyncSession) -> list[RefreshToken]:
-    return list(await db.scalars(select(RefreshToken)))
+    return list(
+        await db.scalars(
+            select(RefreshToken)
+            .order_by(RefreshToken.id)
+            .execution_options(populate_existing=True)
+        )
+    )
+
+
+async def refresh(client: AsyncClient, refresh_token: str) -> Response:
+    return await client.post(
+        "/accounts/refresh", json={"refresh_token": refresh_token}
+    )
 
 
 async def expire_token(db: AsyncSession, email: str = EMAIL) -> None:
@@ -106,6 +125,12 @@ async def active_user(
 ) -> User:
     await activate(client, activation_token)
     return await get_user(db_session)
+
+
+@pytest.fixture
+async def token_pair(client: AsyncClient, active_user: User) -> dict:
+    response = await login(client)
+    return response.json()
 
 
 # --- POST /accounts/register ---
@@ -492,5 +517,130 @@ async def test_login_invalid_payload_returns_422(
     client: AsyncClient, payload: dict
 ) -> None:
     response = await client.post("/accounts/login", json=payload)
+
+    assert response.status_code == 422
+
+
+# --- POST /accounts/refresh ---
+
+
+def make_refresh_jwt(
+    expires_in: timedelta = timedelta(days=1), key: str = settings.jwt_secret_key
+) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": "1",
+        "type": TokenType.REFRESH.value,
+        "jti": "0" * 32,
+        "iat": now,
+        "exp": now + expires_in,
+    }
+    return jwt.encode(payload, key, algorithm=settings.jwt_algorithm)
+
+
+async def test_refresh_returns_new_token_pair(
+    client: AsyncClient, db_session: AsyncSession, active_user: User, token_pair: dict
+) -> None:
+    response = await refresh(client, token_pair["refresh_token"])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["token_type"] == "bearer"
+    assert body["refresh_token"] != token_pair["refresh_token"]
+
+    access = decode_token(body["access_token"], TokenType.ACCESS)
+    new_refresh = decode_token(body["refresh_token"], TokenType.REFRESH)
+    assert access["sub"] == new_refresh["sub"] == str(active_user.id)
+
+    old_jti = decode_token(token_pair["refresh_token"], TokenType.REFRESH)["jti"]
+    old, new = await get_refresh_tokens(db_session)
+    assert (old.jti, old.revoked) == (old_jti, True)
+    assert (new.jti, new.revoked) == (new_refresh["jti"], False)
+
+
+async def test_refresh_new_token_can_be_refreshed_again(
+    client: AsyncClient, token_pair: dict
+) -> None:
+    first = await refresh(client, token_pair["refresh_token"])
+
+    second = await refresh(client, first.json()["refresh_token"])
+
+    assert second.status_code == 200
+
+
+async def test_refresh_reused_token_revokes_all_sessions(
+    client: AsyncClient, db_session: AsyncSession, token_pair: dict
+) -> None:
+    other_device = (await login(client)).json()
+    rotated = (await refresh(client, token_pair["refresh_token"])).json()
+
+    response = await refresh(client, token_pair["refresh_token"])
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": INVALID_REFRESH_TOKEN}
+    assert all(token.revoked for token in await get_refresh_tokens(db_session))
+    assert (await refresh(client, rotated["refresh_token"])).status_code == 401
+    assert (await refresh(client, other_device["refresh_token"])).status_code == 401
+
+
+async def test_refresh_with_access_token_returns_401(
+    client: AsyncClient, db_session: AsyncSession, token_pair: dict
+) -> None:
+    response = await refresh(client, token_pair["access_token"])
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": INVALID_REFRESH_TOKEN}
+    [stored] = await get_refresh_tokens(db_session)
+    assert stored.revoked is False
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "not-a-jwt",
+        make_refresh_jwt(key="a-different-secret-key-of-32-bytes!"),
+        make_refresh_jwt(expires_in=timedelta(minutes=-1)),
+    ],
+    ids=["garbage", "wrong-signature", "expired"],
+)
+async def test_refresh_invalid_token_returns_401(
+    client: AsyncClient, token: str
+) -> None:
+    response = await refresh(client, token)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": INVALID_REFRESH_TOKEN}
+
+
+async def test_refresh_unknown_token_does_not_revoke_sessions(
+    client: AsyncClient, db_session: AsyncSession, active_user: User, token_pair: dict
+) -> None:
+    # Correctly signed, but never saved to the DB.
+    unknown = create_refresh_token(active_user.id).token
+
+    response = await refresh(client, unknown)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": INVALID_REFRESH_TOKEN}
+    [stored] = await get_refresh_tokens(db_session)
+    assert stored.revoked is False
+
+
+async def test_concurrent_refresh_with_same_token(
+    client: AsyncClient, db_session: AsyncSession, token_pair: dict
+) -> None:
+    # Only one request may rotate the token; the other one is treated
+    # as reuse, so the whole session chain is revoked (strict variant).
+    responses = await asyncio.gather(
+        refresh(client, token_pair["refresh_token"]),
+        refresh(client, token_pair["refresh_token"]),
+    )
+
+    assert sorted(r.status_code for r in responses) == [200, 401]
+    assert all(token.revoked for token in await get_refresh_tokens(db_session))
+
+
+async def test_refresh_without_token_returns_422(client: AsyncClient) -> None:
+    response = await client.post("/accounts/refresh", json={})
 
     assert response.status_code == 422

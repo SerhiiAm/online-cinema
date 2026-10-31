@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -93,6 +93,40 @@ async def issue_refresh_token(db: AsyncSession, user_id: int) -> str:
     )
     await db.commit()
     return refresh.token
+
+
+async def get_refresh_token(db: AsyncSession, jti: str) -> RefreshToken | None:
+    result = await db.execute(select(RefreshToken).where(RefreshToken.jti == jti))
+    return result.scalar_one_or_none()
+
+
+async def rotate_refresh_token(db: AsyncSession, jti: str) -> tuple[int, str] | None:
+    # Revoke-and-check in one UPDATE: of two concurrent requests with the same
+    # token, Postgres lets only one match the row, the other gets None.
+    user_id = await db.scalar(
+        update(RefreshToken)
+        .where(
+            RefreshToken.jti == jti,
+            RefreshToken.revoked.is_(False),
+            RefreshToken.expires_at > func.now(),
+        )
+        .values(revoked=True)
+        .returning(RefreshToken.user_id)
+    )
+    if user_id is None:
+        return None
+    # issue_refresh_token commits, so the old token is revoked
+    # and the new one saved in the same transaction.
+    return user_id, await issue_refresh_token(db, user_id)
+
+
+async def revoke_all_refresh_tokens(db: AsyncSession, user_id: int) -> None:
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user_id, RefreshToken.revoked.is_(False))
+        .values(revoked=True)
+    )
+    await db.commit()
 
 
 async def delete_expired_activation_tokens(db: AsyncSession) -> int:

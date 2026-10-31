@@ -4,6 +4,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Annotated
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, status
 from kombu.exceptions import OperationalError
 from sqlalchemy.exc import IntegrityError
@@ -13,7 +14,9 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import (
     DUMMY_PASSWORD_HASH,
+    TokenType,
     create_access_token,
+    decode_token,
     verify_password,
 )
 from app.crud import accounts as crud
@@ -21,6 +24,7 @@ from app.models.accounts import User
 from app.schemas.accounts import (
     LoginRequest,
     MessageResponse,
+    RefreshTokenRequest,
     ResendActivationRequest,
     TokenPairResponse,
     UserActivationRequest,
@@ -43,6 +47,7 @@ ALREADY_ACTIVE = "Account is already active."
 TOKEN_EXPIRED = "Activation token has expired. Request a new one."
 INVALID_CREDENTIALS = "Invalid email or password."
 ACCOUNT_NOT_ACTIVATED = "Account is not activated."
+INVALID_REFRESH_TOKEN = "Invalid or expired refresh token."
 
 
 def queue_activation_email(user: User, token: str) -> None:
@@ -200,4 +205,48 @@ async def login(data: LoginRequest, db: DbSession) -> TokenPairResponse:
     return TokenPairResponse(
         access_token=create_access_token(user.id),
         refresh_token=await crud.issue_refresh_token(db, user.id),
+    )
+
+
+@router.post(
+    "/refresh",
+    summary="Get a new token pair using a refresh token",
+    description=(
+        "Exchanges a valid refresh token for a new pair of tokens. "
+        "The refresh token is single-use: it is revoked as soon as it is "
+        f"used, and the new one is valid for {settings.refresh_token_expire_days} "
+        "days from now.\n\n"
+        "If an already used refresh token is sent again, it is treated as "
+        "stolen: all sessions of the user are revoked and they must log in "
+        "again."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "The refresh token is invalid, expired, revoked "
+            "or has already been used."
+        },
+    },
+)
+async def refresh(data: RefreshTokenRequest, db: DbSession) -> TokenPairResponse:
+    try:
+        payload = decode_token(data.refresh_token, TokenType.REFRESH)
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_REFRESH_TOKEN
+        )
+
+    rotated = await crud.rotate_refresh_token(db, payload["jti"])
+    if rotated is None:
+        stored = await crud.get_refresh_token(db, payload["jti"])
+        if stored is not None and stored.revoked:
+            # Reuse of a revoked token means it was stolen:
+            # kill every session of the user, the thief's included.
+            await crud.revoke_all_refresh_tokens(db, stored.user_id)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_REFRESH_TOKEN
+        )
+
+    user_id, refresh_token = rotated
+    return TokenPairResponse(
+        access_token=create_access_token(user_id), refresh_token=refresh_token
     )
