@@ -12,6 +12,10 @@ from app.core.config import settings
 
 password_hash = PasswordHash.recommended()
 
+# Verified against when the email is unknown, so a failed login takes
+# the same time whether or not the user exists (no email enumeration).
+DUMMY_PASSWORD_HASH = password_hash.hash("dummy-password")
+
 TOKEN_BYTES = 32
 
 

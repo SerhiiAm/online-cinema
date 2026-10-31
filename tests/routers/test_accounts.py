@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import AsyncClient, Response
@@ -9,11 +9,20 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.accounts import ActivationToken, User, UserGroup, UserGroupEnum
+from app.core.security import DUMMY_PASSWORD_HASH, TokenType, decode_token
+from app.models.accounts import (
+    ActivationToken,
+    RefreshToken,
+    User,
+    UserGroup,
+    UserGroupEnum,
+)
 from app.routers.accounts import (
+    ACCOUNT_NOT_ACTIVATED,
     ALREADY_ACTIVE,
     EMAIL_TAKEN,
     INVALID_ACTIVATION,
+    INVALID_CREDENTIALS,
     TOKEN_EXPIRED,
 )
 
@@ -39,6 +48,14 @@ async def resend(client: AsyncClient, email: str = EMAIL) -> Response:
     return await client.post("/accounts/resend-activation", json={"email": email})
 
 
+async def login(
+    client: AsyncClient, email: str = EMAIL, password: str = PASSWORD
+) -> Response:
+    return await client.post(
+        "/accounts/login", json={"email": email, "password": password}
+    )
+
+
 async def get_user(db: AsyncSession, email: str = EMAIL) -> User | None:
     result = await db.execute(
         select(User)
@@ -62,6 +79,10 @@ async def count_users(db: AsyncSession) -> int:
     return await db.scalar(select(func.count()).select_from(User))
 
 
+async def get_refresh_tokens(db: AsyncSession) -> list[RefreshToken]:
+    return list(await db.scalars(select(RefreshToken)))
+
+
 async def expire_token(db: AsyncSession, email: str = EMAIL) -> None:
     user = await get_user(db, email)
     await db.execute(
@@ -77,6 +98,14 @@ async def activation_token(client: AsyncClient, db_session: AsyncSession) -> str
     await register(client)
     token = await get_token(db_session)
     return token.token
+
+
+@pytest.fixture
+async def active_user(
+    client: AsyncClient, db_session: AsyncSession, activation_token: str
+) -> User:
+    await activate(client, activation_token)
+    return await get_user(db_session)
 
 
 # --- POST /accounts/register ---
@@ -356,3 +385,112 @@ async def test_resend_does_not_send_email(
     await resend(client, email=email)
 
     send_activation_email_mock.assert_not_called()
+
+
+# --- POST /accounts/login ---
+
+
+async def test_login_returns_token_pair(
+    client: AsyncClient, db_session: AsyncSession, active_user: User
+) -> None:
+    response = await login(client)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["token_type"] == "bearer"
+
+    access = decode_token(body["access_token"], TokenType.ACCESS)
+    refresh = decode_token(body["refresh_token"], TokenType.REFRESH)
+    assert access["sub"] == refresh["sub"] == str(active_user.id)
+
+    [stored] = await get_refresh_tokens(db_session)
+    assert stored.jti == refresh["jti"]
+    assert stored.user_id == active_user.id
+    assert stored.revoked is False
+
+
+async def test_login_accepts_email_in_any_case(
+    client: AsyncClient, active_user: User
+) -> None:
+    response = await login(client, email="USER@Example.com")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "email, password",
+    [(EMAIL, "Wr0ng!pass"), ("nobody@example.com", PASSWORD)],
+    ids=["wrong-password", "unknown-email"],
+)
+async def test_login_invalid_credentials_returns_401(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    active_user: User,
+    email: str,
+    password: str,
+) -> None:
+    response = await login(client, email=email, password=password)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": INVALID_CREDENTIALS}
+    assert await get_refresh_tokens(db_session) == []
+
+
+async def test_login_unknown_email_still_verifies_password(
+    client: AsyncClient,
+) -> None:
+    # Guards the timing-attack protection: an unknown email must cost
+    # a real password check, otherwise response time reveals registered emails.
+    with patch(
+        "app.routers.accounts.verify_password", return_value=False
+    ) as verify_mock:
+        await login(client, email="nobody@example.com")
+
+    verify_mock.assert_called_once_with(PASSWORD, DUMMY_PASSWORD_HASH)
+
+
+async def test_login_inactive_user_returns_403(
+    client: AsyncClient, db_session: AsyncSession, activation_token: str
+) -> None:
+    response = await login(client)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": ACCOUNT_NOT_ACTIVATED}
+    assert await get_refresh_tokens(db_session) == []
+
+
+async def test_login_inactive_user_with_wrong_password_returns_401(
+    client: AsyncClient, activation_token: str
+) -> None:
+    # The password is checked first, so 403 never reveals that
+    # an inactive account exists to someone who doesn't know the password.
+    response = await login(client, password="Wr0ng!pass")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": INVALID_CREDENTIALS}
+
+
+async def test_login_twice_creates_two_sessions(
+    client: AsyncClient, db_session: AsyncSession, active_user: User
+) -> None:
+    first = await login(client)
+    second = await login(client)
+
+    assert first.status_code == second.status_code == 200
+    tokens = await get_refresh_tokens(db_session)
+    assert len(tokens) == 2
+    assert tokens[0].jti != tokens[1].jti
+    assert all(not token.revoked for token in tokens)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"email": "not-an-email", "password": PASSWORD}, {"email": EMAIL}, {}],
+    ids=["invalid-email", "missing-password", "empty-body"],
+)
+async def test_login_invalid_payload_returns_422(
+    client: AsyncClient, payload: dict
+) -> None:
+    response = await client.post("/accounts/login", json=payload)
+
+    assert response.status_code == 422

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import secrets
 from datetime import datetime, timezone
@@ -10,11 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.security import (
+    DUMMY_PASSWORD_HASH,
+    create_access_token,
+    verify_password,
+)
 from app.crud import accounts as crud
 from app.models.accounts import User
 from app.schemas.accounts import (
+    LoginRequest,
     MessageResponse,
     ResendActivationRequest,
+    TokenPairResponse,
     UserActivationRequest,
     UserRegistrationRequest,
     UserRegistrationResponse,
@@ -33,6 +41,8 @@ EMAIL_TAKEN = "A user with this email already exists."
 INVALID_ACTIVATION = "Invalid email or activation token."
 ALREADY_ACTIVE = "Account is already active."
 TOKEN_EXPIRED = "Activation token has expired. Request a new one."
+INVALID_CREDENTIALS = "Invalid email or password."
+ACCOUNT_NOT_ACTIVATED = "Account is not activated."
 
 
 def queue_activation_email(user: User, token: str) -> None:
@@ -148,4 +158,46 @@ async def resend_activation(
             "If the account exists and is not active, "
             "a new activation link has been sent."
         )
+    )
+
+
+@router.post(
+    "/login",
+    summary="Log in and get a token pair",
+    description=(
+        "Checks the email and password and returns a pair of JWT tokens:\n\n"
+        f"- `access_token` (valid for {settings.access_token_expire_minutes} "
+        "minutes) — send it as `Authorization: Bearer <token>` "
+        "to access protected endpoints;\n"
+        f"- `refresh_token` (valid for {settings.refresh_token_expire_days} "
+        "days) — use it to get a new pair when the access token expires.\n\n"
+        "Each login creates a separate session, so logging in on one device "
+        "does not log out the others."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Invalid email or password."},
+        status.HTTP_403_FORBIDDEN: {
+            "description": "The password is correct, but the account is not "
+            "activated yet."
+        },
+    },
+)
+async def login(data: LoginRequest, db: DbSession) -> TokenPairResponse:
+    user = await crud.get_user_by_email(db, data.email)
+    hashed_password = user.hashed_password if user else DUMMY_PASSWORD_HASH
+    password_ok = await asyncio.to_thread(
+        verify_password, data.password, hashed_password
+    )
+    if user is None or not password_ok:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_CREDENTIALS
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=ACCOUNT_NOT_ACTIVATED
+        )
+
+    return TokenPairResponse(
+        access_token=create_access_token(user.id),
+        refresh_token=await crud.issue_refresh_token(db, user.id),
     )

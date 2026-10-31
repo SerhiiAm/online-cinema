@@ -31,3 +31,14 @@ class ResendActivationRequest(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class TokenPairResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"

@@ -5,8 +5,14 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.security import generate_token, hash_password
-from app.models.accounts import ActivationToken, User, UserGroup, UserGroupEnum
+from app.core.security import create_refresh_token, generate_token, hash_password
+from app.models.accounts import (
+    ActivationToken,
+    RefreshToken,
+    User,
+    UserGroup,
+    UserGroupEnum,
+)
 
 
 def _activation_expires_at() -> datetime:
@@ -78,6 +84,15 @@ async def refresh_activation_token(
     db.add(activation_token)
     await db.commit()
     return activation_token
+
+
+async def issue_refresh_token(db: AsyncSession, user_id: int) -> str:
+    refresh = create_refresh_token(user_id)
+    db.add(
+        RefreshToken(user_id=user_id, jti=refresh.jti, expires_at=refresh.expires_at)
+    )
+    await db.commit()
+    return refresh.token
 
 
 async def delete_expired_activation_tokens(db: AsyncSession) -> int:
