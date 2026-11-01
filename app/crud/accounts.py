@@ -120,6 +120,15 @@ async def rotate_refresh_token(db: AsyncSession, jti: str) -> tuple[int, str] | 
     return user_id, await issue_refresh_token(db, user_id)
 
 
+async def revoke_refresh_token(db: AsyncSession, jti: str) -> None:
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.jti == jti, RefreshToken.revoked.is_(False))
+        .values(revoked=True)
+    )
+    await db.commit()
+
+
 async def revoke_all_refresh_tokens(db: AsyncSession, user_id: int) -> None:
     await db.execute(
         update(RefreshToken)

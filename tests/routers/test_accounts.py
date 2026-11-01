@@ -644,3 +644,82 @@ async def test_refresh_without_token_returns_422(client: AsyncClient) -> None:
     response = await client.post("/accounts/refresh", json={})
 
     assert response.status_code == 422
+
+
+# --- POST /accounts/logout ---
+
+
+async def logout(client: AsyncClient, refresh_token: str) -> Response:
+    return await client.post(
+        "/accounts/logout", json={"refresh_token": refresh_token}
+    )
+
+
+async def test_logout_revokes_refresh_token(
+    client: AsyncClient, db_session: AsyncSession, token_pair: dict
+) -> None:
+    response = await logout(client, token_pair["refresh_token"])
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "Logged out successfully."}
+    [stored] = await get_refresh_tokens(db_session)
+    assert stored.revoked is True
+    assert (await refresh(client, token_pair["refresh_token"])).status_code == 401
+
+
+async def test_logout_keeps_other_sessions(
+    client: AsyncClient, token_pair: dict
+) -> None:
+    other_device = (await login(client)).json()
+
+    await logout(client, token_pair["refresh_token"])
+
+    assert (await refresh(client, other_device["refresh_token"])).status_code == 200
+
+
+async def test_logout_twice_does_not_revoke_other_sessions(
+    client: AsyncClient, token_pair: dict
+) -> None:
+    # A double click must not be treated as reuse of a stolen token.
+    other_device = (await login(client)).json()
+    await logout(client, token_pair["refresh_token"])
+
+    response = await logout(client, token_pair["refresh_token"])
+
+    assert response.status_code == 200
+    assert (await refresh(client, other_device["refresh_token"])).status_code == 200
+
+
+async def test_logout_with_access_token_returns_401(
+    client: AsyncClient, db_session: AsyncSession, token_pair: dict
+) -> None:
+    response = await logout(client, token_pair["access_token"])
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": INVALID_REFRESH_TOKEN}
+    [stored] = await get_refresh_tokens(db_session)
+    assert stored.revoked is False
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "not-a-jwt",
+        make_refresh_jwt(key="a-different-secret-key-of-32-bytes!"),
+        make_refresh_jwt(expires_in=timedelta(minutes=-1)),
+    ],
+    ids=["garbage", "wrong-signature", "expired"],
+)
+async def test_logout_invalid_token_returns_401(
+    client: AsyncClient, token: str
+) -> None:
+    response = await logout(client, token)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": INVALID_REFRESH_TOKEN}
+
+
+async def test_logout_without_token_returns_422(client: AsyncClient) -> None:
+    response = await client.post("/accounts/logout", json={})
+
+    assert response.status_code == 422

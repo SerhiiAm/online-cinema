@@ -250,3 +250,34 @@ async def refresh(data: RefreshTokenRequest, db: DbSession) -> TokenPairResponse
     return TokenPairResponse(
         access_token=create_access_token(user_id), refresh_token=refresh_token
     )
+
+
+@router.post(
+    "/logout",
+    summary="Log out of the current session",
+    description=(
+        "Revokes the given refresh token, so it can no longer be used to get "
+        "new tokens. Other sessions of the user stay active. The access token "
+        "is not stored and stays valid until it expires (at most "
+        f"{settings.access_token_expire_minutes} minutes), so the client "
+        "should delete both tokens.\n\n"
+        "Calling it again with the same token returns the same response."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "The refresh token is invalid or expired."
+        },
+    },
+)
+async def logout(data: RefreshTokenRequest, db: DbSession) -> MessageResponse:
+    try:
+        payload = decode_token(data.refresh_token, TokenType.REFRESH)
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_REFRESH_TOKEN
+        )
+
+    # Idempotent: an already revoked token is not treated as reuse here,
+    # so a double click or a retried request does not end other sessions.
+    await crud.revoke_refresh_token(db, payload["jti"])
+    return MessageResponse(message="Logged out successfully.")
