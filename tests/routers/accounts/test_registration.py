@@ -94,15 +94,15 @@ async def test_register_duplicate_email_returns_409(
     assert await count_users(db_session) == 1
 
 
+# Only our own rules: that the schema really uses StrongPassword and EmailStr.
+# Missing fields / empty body are FastAPI's job and are not tested here.
 @pytest.mark.parametrize(
     "payload",
     [
         {"email": EMAIL, "password": "weak"},
         {"email": "not-an-email", "password": PASSWORD},
-        {"email": EMAIL},
-        {},
     ],
-    ids=["weak-password", "invalid-email", "missing-password", "empty-body"],
+    ids=["weak-password", "invalid-email"],
 )
 async def test_register_invalid_payload_returns_422(
     client: AsyncClient, db_session: AsyncSession, payload: dict

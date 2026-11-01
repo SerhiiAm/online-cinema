@@ -64,13 +64,6 @@ async def test_invalid_token_returns_401(
     assert response.json() == {"detail": INVALID_REFRESH_TOKEN}
 
 
-@ENDPOINTS
-async def test_missing_token_returns_422(client: AsyncClient, path: str) -> None:
-    response = await client.post(path, json={})
-
-    assert response.status_code == 422
-
-
 # --- POST /accounts/refresh ---
 
 

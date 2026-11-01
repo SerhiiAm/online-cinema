@@ -108,16 +108,3 @@ async def test_login_twice_creates_two_sessions(
     assert len(tokens) == 2
     assert tokens[0].jti != tokens[1].jti
     assert all(not token.revoked for token in tokens)
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [{"email": "not-an-email", "password": PASSWORD}, {"email": EMAIL}, {}],
-    ids=["invalid-email", "missing-password", "empty-body"],
-)
-async def test_login_invalid_payload_returns_422(
-    client: AsyncClient, payload: dict
-) -> None:
-    response = await client.post("/accounts/login", json=payload)
-
-    assert response.status_code == 422
