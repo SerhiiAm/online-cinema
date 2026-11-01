@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.dependencies import CurrentUser
 from app.core.security import (
     DUMMY_PASSWORD_HASH,
     TokenType,
@@ -30,6 +31,7 @@ from app.schemas.accounts import (
     UserActivationRequest,
     UserRegistrationRequest,
     UserRegistrationResponse,
+    UserResponse,
 )
 from app.tasks.email import send_activation_email
 
@@ -281,3 +283,24 @@ async def logout(data: RefreshTokenRequest, db: DbSession) -> MessageResponse:
     # so a double click or a retried request does not end other sessions.
     await crud.revoke_refresh_token(db, payload["jti"])
     return MessageResponse(message="Logged out successfully.")
+
+
+@router.get(
+    "/me",
+    summary="Get the current user",
+    description=(
+        "Returns the account of the user the access token belongs to, "
+        "including their group (`user`, `moderator` or `admin`).\n\n"
+        "Requires `Authorization: Bearer <access_token>` — in Swagger, "
+        "click **Authorize** and paste the token."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "The access token is missing, invalid or expired, "
+            "or the user no longer exists."
+        },
+        status.HTTP_403_FORBIDDEN: {"description": "The account is inactive."},
+    },
+)
+async def read_me(user: CurrentUser) -> UserResponse:
+    return UserResponse.model_validate(user)

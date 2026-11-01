@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.core.config import settings
 from app.core.security import create_refresh_token, generate_token, hash_password
@@ -23,6 +24,15 @@ def _activation_expires_at() -> datetime:
 
 async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
     result = await db.execute(select(User).where(User.email == email.lower()))
+    return result.scalar_one_or_none()
+
+
+async def get_user_by_id(db: AsyncSession, user_id: int) -> User | None:
+    # The group is loaded in the same query: lazy loading user.group
+    # later would fail in async code (MissingGreenlet).
+    result = await db.execute(
+        select(User).options(joinedload(User.group)).where(User.id == user_id)
+    )
     return result.scalar_one_or_none()
 
 

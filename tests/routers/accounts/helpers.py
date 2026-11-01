@@ -56,6 +56,12 @@ async def logout(client: AsyncClient, refresh_token: str) -> Response:
     )
 
 
+async def get_me(client: AsyncClient, access_token: str) -> Response:
+    return await client.get(
+        "/accounts/me", headers={"Authorization": f"Bearer {access_token}"}
+    )
+
+
 # --- DB lookups (populate_existing: always read fresh data, not the cache) ---
 
 
