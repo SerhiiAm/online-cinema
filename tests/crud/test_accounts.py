@@ -3,8 +3,13 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.crud.accounts import create_user, delete_expired_activation_tokens
-from app.models.accounts import ActivationToken, User
+from app.crud.accounts import (
+    create_user,
+    delete_expired_activation_tokens,
+    get_user_by_id,
+    promote_to_admin,
+)
+from app.models.accounts import ActivationToken, User, UserGroupEnum
 
 PASSWORD = "Str0ng!pass"
 
@@ -48,3 +53,21 @@ async def test_delete_expired_tokens_returns_zero_when_nothing_expired(
 
     assert await delete_expired_activation_tokens(db_session) == 0
     assert len(await remaining_token_ids(db_session)) == 1
+
+
+async def test_promote_to_admin_makes_inactive_user_active_admin(
+    db_session: AsyncSession,
+) -> None:
+    token = await create_user_with_token(
+        db_session, "boss@example.com", expired=False
+    )
+
+    user_id = token.user_id
+    await promote_to_admin(db_session, token.user)
+
+    db_session.expire_all()  # read the result from the DB, not from memory
+    user = await get_user_by_id(db_session, user_id)
+    assert user is not None
+    assert user.group.name == UserGroupEnum.ADMIN
+    assert user.is_active
+    assert await remaining_token_ids(db_session) == set()

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.dependencies import CurrentUser
+from app.core.dependencies import AdminUser, CurrentUser
 from app.core.security import (
     DUMMY_PASSWORD_HASH,
     TokenType,
@@ -21,7 +21,7 @@ from app.core.security import (
     verify_password,
 )
 from app.crud import accounts as crud
-from app.models.accounts import User
+from app.models.accounts import User, UserGroupEnum
 from app.schemas.accounts import (
     LoginRequest,
     MessageResponse,
@@ -29,6 +29,7 @@ from app.schemas.accounts import (
     ResendActivationRequest,
     TokenPairResponse,
     UserActivationRequest,
+    UserGroupUpdateRequest,
     UserRegistrationRequest,
     UserRegistrationResponse,
     UserResponse,
@@ -50,6 +51,8 @@ TOKEN_EXPIRED = "Activation token has expired. Request a new one."
 INVALID_CREDENTIALS = "Invalid email or password."
 ACCOUNT_NOT_ACTIVATED = "Account is not activated."
 INVALID_REFRESH_TOKEN = "Invalid or expired refresh token."
+USER_NOT_FOUND = "User not found."
+ADMIN_GROUP_LOCKED = "Admin accounts can only be changed on the server."
 
 
 def queue_activation_email(user: User, token: str) -> None:
@@ -304,3 +307,41 @@ async def logout(data: RefreshTokenRequest, db: DbSession) -> MessageResponse:
 )
 async def read_me(user: CurrentUser) -> UserResponse:
     return UserResponse.model_validate(user)
+
+
+@router.patch(
+    "/users/{user_id}/group",
+    summary="Change a user's group (admin only)",
+    description=(
+        "Moves a user between the `user` and `moderator` groups. "
+        "The new group applies to the user's very next request, "
+        "no new login is needed.\n\n"
+        "The `admin` group can't be assigned or taken away here, and admin "
+        "accounts (including your own) can't be changed: admins are managed "
+        "only on the server with `python -m app.scripts.make_admin <email>`."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "The access token is missing, invalid or expired."
+        },
+        status.HTTP_403_FORBIDDEN: {
+            "description": "You are not an admin, or the target user is an admin."
+        },
+        status.HTTP_404_NOT_FOUND: {"description": "The user does not exist."},
+    },
+)
+async def change_user_group(
+    user_id: int, data: UserGroupUpdateRequest, admin: AdminUser, db: DbSession
+) -> UserResponse:
+    group = UserGroupEnum(data.group)
+    if not await crud.change_user_group(db, user_id, group):
+        # Nothing was updated: find out why.
+        if await crud.get_user_by_id(db, user_id) is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=ADMIN_GROUP_LOCKED
+        )
+
+    return UserResponse.model_validate(await crud.get_user_by_id(db, user_id))

@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.security import TokenType
-from app.models.accounts import ActivationToken, RefreshToken, User
+from app.models.accounts import (
+    ActivationToken,
+    RefreshToken,
+    User,
+    UserGroup,
+    UserGroupEnum,
+)
 
 EMAIL = "user@example.com"
 PASSWORD = "Str0ng!pass"
@@ -62,6 +68,16 @@ async def get_me(client: AsyncClient, access_token: str) -> Response:
     )
 
 
+async def change_group(
+    client: AsyncClient, access_token: str, user_id: int, group: str
+) -> Response:
+    return await client.patch(
+        f"/accounts/users/{user_id}/group",
+        json={"group": group},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+
 # --- DB lookups (populate_existing: always read fresh data, not the cache) ---
 
 
@@ -82,6 +98,22 @@ async def get_token(db: AsyncSession, email: str = EMAIL) -> ActivationToken | N
         .execution_options(populate_existing=True)
     )
     return result.scalar_one_or_none()
+
+
+async def get_group(db: AsyncSession, email: str = EMAIL) -> UserGroupEnum:
+    return await db.scalar(
+        select(UserGroup.name).join(User.group).where(User.email == email)
+    )
+
+
+async def set_group(
+    db: AsyncSession, group: UserGroupEnum, email: str = EMAIL
+) -> None:
+    group_id = select(UserGroup.id).where(UserGroup.name == group).scalar_subquery()
+    await db.execute(
+        update(User).where(User.email == email).values(group_id=group_id)
+    )
+    await db.commit()
 
 
 async def count_users(db: AsyncSession) -> int:

@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import ScalarSelect, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -77,6 +77,34 @@ async def activate_user(db: AsyncSession, user: User) -> None:
         delete(ActivationToken).where(ActivationToken.user_id == user.id)
     )
     await db.commit()
+
+
+async def promote_to_admin(db: AsyncSession, user: User) -> None:
+    # An admin who can't log in is useless, so the account is activated too
+    # (activate_user also deletes a leftover activation token and commits).
+    admin_group = await get_user_group(db, UserGroupEnum.ADMIN)
+    user.group_id = admin_group.id
+    await activate_user(db, user)
+
+
+def _group_id(name: UserGroupEnum) -> ScalarSelect[int]:
+    return select(UserGroup.id).where(UserGroup.name == name).scalar_subquery()
+
+
+async def change_user_group(
+    db: AsyncSession, user_id: int, group: UserGroupEnum
+) -> bool:
+    # Admins can't be changed here. The check is part of the same UPDATE,
+    # so a user promoted to admin in parallel can't slip in between
+    # the check and the write. Returns False if nothing was updated.
+    updated_id = await db.scalar(
+        update(User)
+        .where(User.id == user_id, User.group_id != _group_id(UserGroupEnum.ADMIN))
+        .values(group_id=_group_id(group))
+        .returning(User.id)
+    )
+    await db.commit()
+    return updated_id is not None
 
 
 async def refresh_activation_token(

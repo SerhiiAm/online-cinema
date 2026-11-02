@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import (
     AfterValidator,
@@ -64,3 +64,10 @@ class UserResponse(BaseModel):
     is_active: bool
     # Takes user.group.name, so the client gets "user" instead of a group id.
     group: UserGroupEnum = Field(validation_alias=AliasPath("group", "name"))
+
+
+class UserGroupUpdateRequest(BaseModel):
+    # "admin" is not accepted: admins are managed only on the server
+    # (python -m app.scripts.make_admin).
+    # Plain strings, so a 422 says "'user' or 'moderator'", not enum reprs.
+    group: Literal["user", "moderator"]
