@@ -14,6 +14,9 @@ docker compose up --build -d
 docker compose exec app alembic upgrade head
 ```
 
+Before the first start, set `JWT_SECRET_KEY` in `.env` to a long random string, e.g.
+the output of `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+
 - API docs (Swagger): http://localhost:8000/docs
 - Health check: http://localhost:8000/health
 - Mailpit (local inbox for outgoing emails): http://localhost:8025
@@ -87,11 +90,20 @@ every database connection waits about 2 seconds for an IPv6 attempt first.
 
 ### Accounts
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/accounts/register` | Register a new inactive user and send an activation email (token valid for 24 hours) |
-| POST | `/accounts/activate` | Activate the account with the email and activation token |
-| POST | `/accounts/resend-activation` | Send a new activation email if the account is not active yet |
+| Method | Path | Access | Description |
+|---|---|---|---|
+| POST | `/accounts/register` | public | Register a new inactive user and send an activation email (token valid for 24 hours) |
+| POST | `/accounts/activate` | public | Activate the account with the email and activation token |
+| POST | `/accounts/resend-activation` | public | Send a new activation email if the account is not active yet |
+| POST | `/accounts/login` | public | Get an access + refresh token pair |
+| POST | `/accounts/refresh` | public | Exchange a refresh token for a new pair |
+| POST | `/accounts/logout` | public | Revoke the given refresh token (this session only) |
+| GET | `/accounts/me` | any user | Get the current user and their group |
+| PATCH | `/accounts/users/{user_id}/group` | admin | Move a user between `user` and `moderator` |
+| POST | `/accounts/users/{user_id}/activate` | admin | Activate an account manually, without the email token |
+
+`refresh` and `logout` are public because they are authorized by the refresh
+token in the body, not by the `Authorization` header.
 
 Passwords must be at least 8 characters long and contain an uppercase letter,
 a lowercase letter, a digit and a special character.
@@ -116,6 +128,72 @@ docker compose logs celery_worker | grep "expired activation tokens"
 
 Full request and response schemas are available in Swagger.
 
+### Authentication
+
+1. `POST /accounts/login` with the email and password of an active account.
+2. Copy the `access_token` from the response.
+3. In Swagger click **Authorize** and paste it. Protected endpoints now send
+   `Authorization: Bearer <token>`.
+
+| Token | Lifetime | Used for |
+|---|---|---|
+| access | 15 minutes | every protected request |
+| refresh | 7 days | getting a new pair via `/accounts/refresh` |
+
+A refresh token works only once: `/accounts/refresh` revokes it and returns a
+new one. If an already used refresh token is sent again, it is treated as
+stolen and **all** sessions of the user are revoked, so they must log in again.
+
+The user and their group are loaded from the database on every request, so a
+group change or a deactivation applies immediately, even with an old token.
+
+Expired refresh tokens are deleted once a day at 03:00 UTC by `celery_beat`.
+Revoked tokens that have not expired yet are kept on purpose: they are needed
+to detect the reuse of a stolen token. To run the cleanup right away:
+
+```bash
+docker compose exec app celery -A app.core.celery_app call app.tasks.accounts.delete_expired_refresh_tokens
+```
+
+### Roles
+
+| Group | Permissions |
+|---|---|
+| `user` | default group of every new account |
+| `moderator` | everything a user can, plus content management (coming with the movie features) |
+| `admin` | everything a moderator can, plus changing groups and activating accounts |
+
+Each group inherits the permissions of the groups below it.
+
+The `admin` group is managed only on the server, not via the API. To create the
+first admin, register an account as usual and then run:
+
+```bash
+docker compose exec app python -m app.scripts.make_admin admin@example.com
+```
+
+The script makes the existing account an admin and activates it, so the
+activation email is not needed. Via the API an admin can only move users
+between `user` and `moderator`; admin accounts, including their own, can't be
+changed there. This way no admin can demote another one, and the system can
+never end up without an admin because of two admins demoting each other.
+
+### Design decisions
+
+These deliberately differ from the original task:
+
+- **Refresh tokens are stored by `jti`, not as the token itself.** The database
+  keeps only the token's unique id, its expiry and a `revoked` flag. A database
+  leak then gives an attacker no usable tokens, the same idea as storing
+  password hashes instead of passwords.
+- **Logout revokes the refresh token instead of deleting it.** A deleted token
+  would look "unknown" if it showed up again, and its reuse could not be
+  detected. Revoked tokens are deleted by the daily cleanup once they expire.
+- **Access tokens are not revoked on logout.** They are not stored, so an
+  access token stays valid for the rest of its lifetime (at most 15 minutes).
+  The client deletes both tokens on logout; a Redis blacklist for access tokens
+  was considered not worth the extra complexity for this window.
+
 ## Project structure
 
 ```
@@ -126,6 +204,7 @@ app/
   crud/       database operations
   routers/    API endpoints
   tasks/      Celery tasks
+  scripts/    server-side admin commands (make_admin)
 alembic/      database migrations
 tests/        pytest tests (mirrors the app/ structure)
 ```
@@ -133,7 +212,7 @@ tests/        pytest tests (mirrors the app/ structure)
 ## Planned features
 
 1. User registration and account activation — done
-2. JWT authentication and roles
+2. JWT authentication and roles — done
 3. Password change and reset
 4. Movies: catalog and moderator CRUD
 5. Shopping cart

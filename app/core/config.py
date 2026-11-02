@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
 
     activation_token_expire_hours: int = 24
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 7
 
     redis_url: str = "redis://127.0.0.1:6379/0"
 

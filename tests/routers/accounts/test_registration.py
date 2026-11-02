@@ -1,83 +1,34 @@
+"""Account creation flow: POST /register, /activate, /resend-activation."""
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from httpx import AsyncClient, Response
+from httpx import AsyncClient
 from kombu.exceptions import OperationalError
-from sqlalchemy import func, select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.accounts import ActivationToken, User, UserGroup, UserGroupEnum
+from app.models.accounts import UserGroup, UserGroupEnum
 from app.routers.accounts import (
     ALREADY_ACTIVE,
     EMAIL_TAKEN,
     INVALID_ACTIVATION,
     TOKEN_EXPIRED,
 )
-
-EMAIL = "user@example.com"
-PASSWORD = "Str0ng!pass"
-
-
-async def register(
-    client: AsyncClient, email: str = EMAIL, password: str = PASSWORD
-) -> Response:
-    return await client.post(
-        "/accounts/register", json={"email": email, "password": password}
-    )
-
-
-async def activate(client: AsyncClient, token: str, email: str = EMAIL) -> Response:
-    return await client.post(
-        "/accounts/activate", json={"email": email, "token": token}
-    )
-
-
-async def resend(client: AsyncClient, email: str = EMAIL) -> Response:
-    return await client.post("/accounts/resend-activation", json={"email": email})
-
-
-async def get_user(db: AsyncSession, email: str = EMAIL) -> User | None:
-    result = await db.execute(
-        select(User)
-        .where(User.email == email)
-        .execution_options(populate_existing=True)
-    )
-    return result.scalar_one_or_none()
-
-
-async def get_token(db: AsyncSession, email: str = EMAIL) -> ActivationToken | None:
-    result = await db.execute(
-        select(ActivationToken)
-        .join(ActivationToken.user)
-        .where(User.email == email)
-        .execution_options(populate_existing=True)
-    )
-    return result.scalar_one_or_none()
-
-
-async def count_users(db: AsyncSession) -> int:
-    return await db.scalar(select(func.count()).select_from(User))
-
-
-async def expire_token(db: AsyncSession, email: str = EMAIL) -> None:
-    user = await get_user(db, email)
-    await db.execute(
-        update(ActivationToken)
-        .where(ActivationToken.user_id == user.id)
-        .values(expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
-    )
-    await db.commit()
-
-
-@pytest.fixture
-async def activation_token(client: AsyncClient, db_session: AsyncSession) -> str:
-    await register(client)
-    token = await get_token(db_session)
-    return token.token
-
+from tests.routers.accounts.helpers import (
+    EMAIL,
+    PASSWORD,
+    activate,
+    count_users,
+    expire_token,
+    get_token,
+    get_user,
+    register,
+    resend,
+)
 
 # --- POST /accounts/register ---
 
@@ -143,15 +94,15 @@ async def test_register_duplicate_email_returns_409(
     assert await count_users(db_session) == 1
 
 
+# Only our own rules: that the schema really uses StrongPassword and EmailStr.
+# Missing fields / empty body are FastAPI's job and are not tested here.
 @pytest.mark.parametrize(
     "payload",
     [
         {"email": EMAIL, "password": "weak"},
         {"email": "not-an-email", "password": PASSWORD},
-        {"email": EMAIL},
-        {},
     ],
-    ids=["weak-password", "invalid-email", "missing-password", "empty-body"],
+    ids=["weak-password", "invalid-email"],
 )
 async def test_register_invalid_payload_returns_422(
     client: AsyncClient, db_session: AsyncSession, payload: dict

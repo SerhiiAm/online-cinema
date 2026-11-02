@@ -18,5 +18,10 @@ celery_app.conf.update(
             "task": "app.tasks.accounts.delete_expired_activation_tokens",
             "schedule": crontab(minute=0),  # every hour at :00
         },
+        "delete-expired-refresh-tokens": {
+            "task": "app.tasks.accounts.delete_expired_refresh_tokens",
+            # Refresh tokens live 7 days, a day of leftovers is harmless.
+            "schedule": crontab(minute=0, hour=3),  # every day at 03:00 UTC
+        },
     },
 )

@@ -30,6 +30,7 @@ jobs:
       POSTGRES_DB: test
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: 5432
+      JWT_SECRET_KEY: test-secret-key-for-ci-only-0123456789
 
     steps:
       - name: Check out code
