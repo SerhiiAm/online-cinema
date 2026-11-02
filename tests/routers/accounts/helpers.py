@@ -78,6 +78,15 @@ async def change_group(
     )
 
 
+async def activate_by_admin(
+    client: AsyncClient, access_token: str, user_id: int
+) -> Response:
+    return await client.post(
+        f"/accounts/users/{user_id}/activate",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+
 # --- DB lookups (populate_existing: always read fresh data, not the cache) ---
 
 

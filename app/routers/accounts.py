@@ -345,3 +345,34 @@ async def change_user_group(
         )
 
     return UserResponse.model_validate(await crud.get_user_by_id(db, user_id))
+
+
+@router.post(
+    "/users/{user_id}/activate",
+    summary="Activate a user's account manually (admin only)",
+    description=(
+        "Activates the account without the email token, e.g. when the "
+        "activation email never arrived. The user's pending activation "
+        "token is deleted.\n\n"
+        "Activating an already active account changes nothing and returns "
+        "the same response."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "The access token is missing, invalid or expired."
+        },
+        status.HTTP_403_FORBIDDEN: {"description": "You are not an admin."},
+        status.HTTP_404_NOT_FOUND: {"description": "The user does not exist."},
+    },
+)
+async def activate_user_by_admin(
+    user_id: int, admin: AdminUser, db: DbSession
+) -> UserResponse:
+    user = await crud.get_user_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND
+        )
+    if not user.is_active:
+        await crud.activate_user(db, user)
+    return UserResponse.model_validate(user)

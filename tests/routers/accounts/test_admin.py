@@ -1,4 +1,4 @@
-"""Admin-only endpoints: changing a user's group."""
+"""Admin-only endpoints: changing a user's group and manual activation."""
 
 import pytest
 from httpx import AsyncClient
@@ -10,8 +10,10 @@ from app.models.accounts import User, UserGroupEnum
 from app.routers.accounts import ADMIN_GROUP_LOCKED, USER_NOT_FOUND
 from tests.routers.accounts.helpers import (
     EMAIL,
+    activate_by_admin,
     change_group,
     get_group,
+    get_token,
     get_user,
     login,
     register,
@@ -128,3 +130,64 @@ async def test_only_admin_can_change_groups(
     assert response.status_code == 403
     assert response.json() == {"detail": PERMISSION_DENIED}
     assert await get_group(db_session, other_email) == UserGroupEnum.USER
+
+
+# --- Manual activation ---
+
+
+async def test_admin_activates_inactive_user(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    activation_token: str,
+    admin_token: str,
+) -> None:
+    user = await get_user(db_session)
+
+    response = await activate_by_admin(client, admin_token, user.id)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": user.id,
+        "email": EMAIL,
+        "is_active": True,
+        "group": "user",
+    }
+    assert (await get_user(db_session)).is_active
+    assert await get_token(db_session) is None
+
+
+async def test_admin_activating_active_user_changes_nothing(
+    client: AsyncClient, active_user: User, admin_token: str
+) -> None:
+    response = await activate_by_admin(client, admin_token, active_user.id)
+
+    assert response.status_code == 200
+    assert response.json()["is_active"] is True
+
+
+async def test_activate_unknown_user_returns_404(
+    client: AsyncClient, admin_token: str
+) -> None:
+    response = await activate_by_admin(client, admin_token, 999)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": USER_NOT_FOUND}
+
+
+@pytest.mark.parametrize("caller_group", [UserGroupEnum.USER, UserGroupEnum.MODERATOR])
+async def test_only_admin_can_activate_users(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    token_pair: dict,
+    caller_group: UserGroupEnum,
+) -> None:
+    other_email = "other@example.com"
+    await register(client, other_email)
+    other = await get_user(db_session, other_email)
+    await set_group(db_session, caller_group)
+
+    response = await activate_by_admin(client, token_pair["access_token"], other.id)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": PERMISSION_DENIED}
+    assert not (await get_user(db_session, other_email)).is_active
