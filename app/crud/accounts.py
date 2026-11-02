@@ -184,3 +184,13 @@ async def delete_expired_activation_tokens(db: AsyncSession) -> int:
     )
     await db.commit()
     return result.rowcount
+
+
+async def delete_expired_refresh_tokens(db: AsyncSession) -> int:
+    # Only expired rows: a revoked but not yet expired token must stay,
+    # otherwise its reuse would no longer be detected on /refresh.
+    result = await db.execute(
+        delete(RefreshToken).where(RefreshToken.expires_at < func.now())
+    )
+    await db.commit()
+    return result.rowcount

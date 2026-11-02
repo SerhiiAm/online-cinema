@@ -3,26 +3,42 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.tasks.accounts import delete_expired_activation_tokens
+from app.tasks.accounts import (
+    delete_expired_activation_tokens,
+    delete_expired_refresh_tokens,
+)
 from tests.conftest import TEST_DATABASE_URL
 
+# Each cleanup task and the crud function it must call.
+TASKS = [
+    pytest.param(
+        delete_expired_activation_tokens,
+        "delete_expired_activation_tokens",
+        id="activation",
+    ),
+    pytest.param(
+        delete_expired_refresh_tokens, "delete_expired_refresh_tokens", id="refresh"
+    ),
+]
 
-# Sync tests on purpose: the task calls asyncio.run(), which can't be used
+
+# Sync tests on purpose: the tasks call asyncio.run(), which can't be used
 # inside the event loop that pytest-asyncio runs async tests in.
 
 
-def test_task_returns_number_of_deleted_tokens() -> None:
+@pytest.mark.parametrize(("task", "crud_name"), TASKS)
+def test_task_returns_number_of_deleted_tokens(task, crud_name: str) -> None:
     with patch(
-        "app.tasks.accounts.crud.delete_expired_activation_tokens",
-        new=AsyncMock(return_value=3),
+        f"app.tasks.accounts.crud.{crud_name}", new=AsyncMock(return_value=3)
     ) as crud_mock:
-        assert delete_expired_activation_tokens() == 3
+        assert task() == 3
 
     crud_mock.assert_awaited_once()
 
 
+@pytest.mark.parametrize(("task", "crud_name"), TASKS)
 def test_task_can_run_repeatedly_in_one_process(
-    test_database: None, monkeypatch: pytest.MonkeyPatch
+    task, crud_name: str, test_database: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A worker process runs the task many times; each run gets a new event loop.
     # Reusing pooled connections across loops would fail on the second run.
@@ -31,5 +47,5 @@ def test_task_can_run_repeatedly_in_one_process(
         "app.tasks.accounts.settings", SimpleNamespace(database_url=test_url)
     )
 
-    assert delete_expired_activation_tokens() == 0
-    assert delete_expired_activation_tokens() == 0
+    assert task() == 0
+    assert task() == 0
