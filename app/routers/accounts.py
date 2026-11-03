@@ -26,6 +26,7 @@ from app.schemas.accounts import (
     LoginRequest,
     MessageResponse,
     PasswordChangeRequest,
+    PasswordResetRequest,
     RefreshTokenRequest,
     ResendActivationRequest,
     TokenPairResponse,
@@ -35,7 +36,7 @@ from app.schemas.accounts import (
     UserRegistrationResponse,
     UserResponse,
 )
-from app.tasks.email import send_activation_email
+from app.tasks.email import send_activation_email, send_password_reset_email
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ router = APIRouter(prefix="/accounts", tags=["Accounts"])
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 TOKEN_TTL_HOURS = settings.activation_token_expire_hours
+RESET_TTL_MINUTES = settings.password_reset_token_expire_minutes
 
 EMAIL_TAKEN = "A user with this email already exists."
 INVALID_ACTIVATION = "Invalid email or activation token."
@@ -65,6 +67,14 @@ def queue_activation_email(user: User, token: str) -> None:
         send_activation_email.delay(user.email, token)
     except OperationalError:
         logger.exception("Failed to queue activation email for user %s", user.id)
+
+
+def queue_password_reset_email(user: User, token: str) -> None:
+    # Same as above: the user can simply request the reset again.
+    try:
+        send_password_reset_email.delay(user.email, token)
+    except OperationalError:
+        logger.exception("Failed to queue password reset email for user %s", user.id)
 
 
 @router.post(
@@ -357,6 +367,36 @@ async def change_password(
     await crud.set_password(db, user, data.new_password)
     return MessageResponse(
         message="Password changed successfully. Log in again with the new password."
+    )
+
+
+@router.post(
+    "/password-reset/request",
+    summary="Request a password reset email",
+    description=(
+        "For a forgotten password. If the email belongs to an active account, "
+        "sends a link with a reset token valid for "
+        f"{RESET_TTL_MINUTES} minutes. "
+        "A new request invalidates the previous link.\n\n"
+        "Always returns the same response, so it cannot be used to check "
+        "whether an email is registered. An account that is not activated "
+        "yet gets no email: activate it first via "
+        "`POST /accounts/resend-activation`."
+    ),
+)
+async def request_password_reset(
+    data: PasswordResetRequest, db: DbSession
+) -> MessageResponse:
+    user = await crud.get_user_by_email(db, data.email)
+    if user is not None and user.is_active:
+        token = await crud.issue_password_reset_token(db, user.id)
+        queue_password_reset_email(user, token)
+
+    return MessageResponse(
+        message=(
+            "If the account exists and is active, "
+            "a password reset link has been sent."
+        )
     )
 
 

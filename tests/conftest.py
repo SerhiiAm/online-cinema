@@ -79,8 +79,16 @@ def send_activation_email_mock() -> Generator[MagicMock, None, None]:
 
 
 @pytest.fixture
+def send_password_reset_email_mock() -> Generator[MagicMock, None, None]:
+    with patch("app.routers.accounts.send_password_reset_email.delay") as mock:
+        yield mock
+
+
+@pytest.fixture
 async def client(
-    db_engine: AsyncEngine, send_activation_email_mock: MagicMock
+    db_engine: AsyncEngine,
+    send_activation_email_mock: MagicMock,
+    send_password_reset_email_mock: MagicMock,
 ) -> AsyncGenerator[AsyncClient, None]:
     session_maker = async_sessionmaker(db_engine, expire_on_commit=False)
 

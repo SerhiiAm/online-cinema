@@ -2,11 +2,17 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import ScalarSelect, delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.core.config import settings
-from app.core.security import create_refresh_token, generate_token, hash_password
+from app.core.security import (
+    create_refresh_token,
+    generate_token,
+    hash_password,
+    hash_token,
+)
 from app.models.accounts import (
     ActivationToken,
     PasswordResetToken,
@@ -175,6 +181,25 @@ async def revoke_all_refresh_tokens(db: AsyncSession, user_id: int) -> None:
         .values(revoked=True)
     )
     await db.commit()
+
+
+async def issue_password_reset_token(db: AsyncSession, user_id: int) -> str:
+    # One token per user, so a new request makes the previous email useless.
+    # Upsert instead of delete + insert: two parallel requests would both
+    # delete, then the second insert would hit UNIQUE(user_id) -> 500.
+    token = generate_token()
+    values = {
+        "token": hash_token(token),
+        "expires_at": datetime.now(timezone.utc)
+        + timedelta(minutes=settings.password_reset_token_expire_minutes),
+    }
+    await db.execute(
+        insert(PasswordResetToken)
+        .values(user_id=user_id, **values)
+        .on_conflict_do_update(index_elements=["user_id"], set_=values)
+    )
+    await db.commit()
+    return token
 
 
 async def set_password(db: AsyncSession, user: User, password: str) -> None:
