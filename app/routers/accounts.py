@@ -25,6 +25,7 @@ from app.models.accounts import User, UserGroupEnum
 from app.schemas.accounts import (
     LoginRequest,
     MessageResponse,
+    PasswordChangeRequest,
     RefreshTokenRequest,
     ResendActivationRequest,
     TokenPairResponse,
@@ -53,6 +54,8 @@ ACCOUNT_NOT_ACTIVATED = "Account is not activated."
 INVALID_REFRESH_TOKEN = "Invalid or expired refresh token."
 USER_NOT_FOUND = "User not found."
 ADMIN_GROUP_LOCKED = "Admin accounts can only be changed on the server."
+WRONG_PASSWORD = "Current password is incorrect."
+SAME_PASSWORD = "New password must be different from the current one."
 
 
 def queue_activation_email(user: User, token: str) -> None:
@@ -307,6 +310,54 @@ async def logout(data: RefreshTokenRequest, db: DbSession) -> MessageResponse:
 )
 async def read_me(user: CurrentUser) -> UserResponse:
     return UserResponse.model_validate(user)
+
+
+@router.post(
+    "/change-password",
+    summary="Change the password",
+    description=(
+        "Sets a new password after checking the current one. "
+        "All sessions of the user, including the current one, are logged out "
+        "and a pending password reset link stops working, so the user has to "
+        "log in again with the new password. The access token stays valid "
+        f"until it expires (at most {settings.access_token_expire_minutes} "
+        "minutes).\n\n"
+        "Password requirements: at least 8 characters, one uppercase letter, "
+        "one lowercase letter, one digit and one special character. "
+        "The new password must differ from the current one."
+    ),
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "The current password is wrong, or the new password "
+            "is the same as the current one."
+        },
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "The access token is missing, invalid or expired."
+        },
+        status.HTTP_403_FORBIDDEN: {"description": "The account is inactive."},
+    },
+)
+async def change_password(
+    data: PasswordChangeRequest, user: CurrentUser, db: DbSession
+) -> MessageResponse:
+    # 400, not 401: a 401 would make the client think its token has expired.
+    if not await asyncio.to_thread(
+        verify_password, data.old_password, user.hashed_password
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=WRONG_PASSWORD
+        )
+    # The old password is known to be correct here, so comparing the plain
+    # strings is enough (no second slow hash check).
+    if data.new_password == data.old_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=SAME_PASSWORD
+        )
+
+    await crud.set_password(db, user, data.new_password)
+    return MessageResponse(
+        message="Password changed successfully. Log in again with the new password."
+    )
 
 
 @router.patch(

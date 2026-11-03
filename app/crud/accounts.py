@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.security import create_refresh_token, generate_token, hash_password
 from app.models.accounts import (
     ActivationToken,
+    PasswordResetToken,
     RefreshToken,
     User,
     UserGroup,
@@ -174,6 +175,17 @@ async def revoke_all_refresh_tokens(db: AsyncSession, user_id: int) -> None:
         .values(revoked=True)
     )
     await db.commit()
+
+
+async def set_password(db: AsyncSession, user: User, password: str) -> None:
+    # One transaction: the new password, no pending reset link (an old email
+    # must not undo the change) and every session logged out.
+    user.hashed_password = await asyncio.to_thread(hash_password, password)
+    await db.execute(
+        delete(PasswordResetToken).where(PasswordResetToken.user_id == user.id)
+    )
+    # Commits everything above together with the revoke.
+    await revoke_all_refresh_tokens(db, user.id)
 
 
 async def delete_expired_activation_tokens(db: AsyncSession) -> int:

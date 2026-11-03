@@ -3,16 +3,25 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import verify_password
 from app.crud.accounts import (
     create_user,
     delete_expired_activation_tokens,
     delete_expired_refresh_tokens,
     get_user_by_id,
     promote_to_admin,
+    set_password,
 )
-from app.models.accounts import ActivationToken, RefreshToken, User, UserGroupEnum
+from app.models.accounts import (
+    ActivationToken,
+    PasswordResetToken,
+    RefreshToken,
+    User,
+    UserGroupEnum,
+)
 
 PASSWORD = "Str0ng!pass"
+NEW_PASSWORD = "N3w!passw0rd"
 
 
 async def create_user_with_token(
@@ -99,3 +108,38 @@ async def test_delete_expired_refresh_tokens_keeps_unexpired_ones(
     assert deleted == 2
     remaining = set(await db_session.scalars(select(RefreshToken.jti)))
     assert remaining == {tokens["valid"].jti, tokens["revoked_not_expired"].jti}
+
+
+async def test_set_password_affects_only_this_user(db_session: AsyncSession) -> None:
+    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    users = {}
+    for name in ("target", "other"):
+        user, _ = await create_user(db_session, f"{name}@example.com", PASSWORD)
+        db_session.add_all(
+            [
+                RefreshToken(user_id=user.id, jti=name[0] * 32, expires_at=future),
+                PasswordResetToken(
+                    user_id=user.id, token=name[0] * 64, expires_at=future
+                ),
+            ]
+        )
+        users[name] = user
+    await db_session.commit()
+
+    target_id, other_id = users["target"].id, users["other"].id
+
+    await set_password(db_session, users["target"], NEW_PASSWORD)
+
+    db_session.expire_all()  # read the result from the DB, not from memory
+    target = await get_user_by_id(db_session, target_id)
+    other = await get_user_by_id(db_session, other_id)
+    assert verify_password(NEW_PASSWORD, target.hashed_password)
+    assert verify_password(PASSWORD, other.hashed_password)
+    revoked = dict(
+        (
+            await db_session.execute(select(RefreshToken.user_id, RefreshToken.revoked))
+        ).all()
+    )
+    assert revoked == {target.id: True, other.id: False}
+    reset_owners = set(await db_session.scalars(select(PasswordResetToken.user_id)))
+    assert reset_owners == {other.id}
