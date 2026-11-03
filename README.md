@@ -99,6 +99,9 @@ every database connection waits about 2 seconds for an IPv6 attempt first.
 | POST | `/accounts/refresh` | public | Exchange a refresh token for a new pair |
 | POST | `/accounts/logout` | public | Revoke the given refresh token (this session only) |
 | GET | `/accounts/me` | any user | Get the current user and their group |
+| POST | `/accounts/change-password` | any user | Change the password using the current one |
+| POST | `/accounts/password-reset/request` | public | Send a password reset email if the account is active (token valid for 60 minutes) |
+| POST | `/accounts/password-reset/confirm` | public | Set a new password with the email and reset token, without the old password |
 | PATCH | `/accounts/users/{user_id}/group` | admin | Move a user between `user` and `moderator` |
 | POST | `/accounts/users/{user_id}/activate` | admin | Activate an account manually, without the email token |
 
@@ -106,7 +109,8 @@ every database connection waits about 2 seconds for an IPv6 attempt first.
 token in the body, not by the `Authorization` header.
 
 Passwords must be at least 8 characters long and contain an uppercase letter,
-a lowercase letter, a digit and a special character.
+a lowercase letter, a digit and a special character. The same rules apply to
+a new password set via change or reset.
 
 To activate an account locally:
 
@@ -155,6 +159,35 @@ to detect the reuse of a stolen token. To run the cleanup right away:
 docker compose exec app celery -A app.core.celery_app call app.tasks.accounts.delete_expired_refresh_tokens
 ```
 
+### Password change and reset
+
+**Change** (the user remembers the password): log in, click **Authorize**, then
+call `POST /accounts/change-password` with the current and the new password.
+The new password must differ from the current one.
+
+**Reset** (the password is forgotten), locally:
+
+1. `POST /accounts/password-reset/request` with the email.
+2. Open Mailpit at http://localhost:8025 and find the "Reset your password" email.
+3. Copy the token from the email into `POST /accounts/password-reset/confirm`
+   together with the email and the new password.
+
+The reset token is valid for 60 minutes and works only once. A new request
+invalidates the previous email. The response to a request is the same whether
+the email is registered or not, so it can't be used to find out who has an
+account. Accounts that are not activated yet get no reset email.
+
+After a successful change or reset **all** sessions of the user are logged out
+(every refresh token is revoked), so a stolen token stops working. A pending
+reset link is also invalidated by a password change.
+
+Expired reset tokens are deleted every hour (at :30) by `celery_beat`. To run
+the cleanup right away:
+
+```bash
+docker compose exec app celery -A app.core.celery_app call app.tasks.accounts.delete_expired_password_reset_tokens
+```
+
 ### Roles
 
 | Group | Permissions |
@@ -193,6 +226,11 @@ These deliberately differ from the original task:
   access token stays valid for the rest of its lifetime (at most 15 minutes).
   The client deletes both tokens on logout; a Redis blacklist for access tokens
   was considered not worth the extra complexity for this window.
+- **Password reset tokens are stored as a SHA-256 hash.** The `token` column
+  holds the hash, and the token itself exists only in the email. A database
+  leak then can't be used to reset anyone's password. A fast unsalted hash is
+  enough here because the token is random, not a guessable password, and it
+  lets the row be found by the hash.
 
 ## Project structure
 
@@ -213,7 +251,7 @@ tests/        pytest tests (mirrors the app/ structure)
 
 1. User registration and account activation — done
 2. JWT authentication and roles — done
-3. Password change and reset
+3. Password change and reset — done
 4. Movies: catalog and moderator CRUD
 5. Shopping cart
 6. Orders

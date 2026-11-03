@@ -18,6 +18,11 @@ celery_app.conf.update(
             "task": "app.tasks.accounts.delete_expired_activation_tokens",
             "schedule": crontab(minute=0),  # every hour at :00
         },
+        "delete-expired-password-reset-tokens": {
+            "task": "app.tasks.accounts.delete_expired_password_reset_tokens",
+            # Reset tokens live 1 hour, so hourly keeps the table tiny.
+            "schedule": crontab(minute=30),  # every hour at :30
+        },
         "delete-expired-refresh-tokens": {
             "task": "app.tasks.accounts.delete_expired_refresh_tokens",
             # Refresh tokens live 7 days, a day of leftovers is harmless.

@@ -25,6 +25,9 @@ from app.models.accounts import User, UserGroupEnum
 from app.schemas.accounts import (
     LoginRequest,
     MessageResponse,
+    PasswordChangeRequest,
+    PasswordResetConfirmRequest,
+    PasswordResetRequest,
     RefreshTokenRequest,
     ResendActivationRequest,
     TokenPairResponse,
@@ -34,7 +37,7 @@ from app.schemas.accounts import (
     UserRegistrationResponse,
     UserResponse,
 )
-from app.tasks.email import send_activation_email
+from app.tasks.email import send_activation_email, send_password_reset_email
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,7 @@ router = APIRouter(prefix="/accounts", tags=["Accounts"])
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 TOKEN_TTL_HOURS = settings.activation_token_expire_hours
+RESET_TTL_MINUTES = settings.password_reset_token_expire_minutes
 
 EMAIL_TAKEN = "A user with this email already exists."
 INVALID_ACTIVATION = "Invalid email or activation token."
@@ -53,6 +57,9 @@ ACCOUNT_NOT_ACTIVATED = "Account is not activated."
 INVALID_REFRESH_TOKEN = "Invalid or expired refresh token."
 USER_NOT_FOUND = "User not found."
 ADMIN_GROUP_LOCKED = "Admin accounts can only be changed on the server."
+WRONG_PASSWORD = "Current password is incorrect."
+SAME_PASSWORD = "New password must be different from the current one."
+INVALID_RESET_TOKEN = "Invalid or expired password reset token."
 
 
 def queue_activation_email(user: User, token: str) -> None:
@@ -62,6 +69,14 @@ def queue_activation_email(user: User, token: str) -> None:
         send_activation_email.delay(user.email, token)
     except OperationalError:
         logger.exception("Failed to queue activation email for user %s", user.id)
+
+
+def queue_password_reset_email(user: User, token: str) -> None:
+    # Same as above: the user can simply request the reset again.
+    try:
+        send_password_reset_email.delay(user.email, token)
+    except OperationalError:
+        logger.exception("Failed to queue password reset email for user %s", user.id)
 
 
 @router.post(
@@ -307,6 +322,119 @@ async def logout(data: RefreshTokenRequest, db: DbSession) -> MessageResponse:
 )
 async def read_me(user: CurrentUser) -> UserResponse:
     return UserResponse.model_validate(user)
+
+
+@router.post(
+    "/change-password",
+    summary="Change the password",
+    description=(
+        "Sets a new password after checking the current one. "
+        "All sessions of the user, including the current one, are logged out "
+        "and a pending password reset link stops working, so the user has to "
+        "log in again with the new password. The access token stays valid "
+        f"until it expires (at most {settings.access_token_expire_minutes} "
+        "minutes).\n\n"
+        "Password requirements: at least 8 characters, one uppercase letter, "
+        "one lowercase letter, one digit and one special character. "
+        "The new password must differ from the current one."
+    ),
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "The current password is wrong, or the new password "
+            "is the same as the current one."
+        },
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "The access token is missing, invalid or expired."
+        },
+        status.HTTP_403_FORBIDDEN: {"description": "The account is inactive."},
+    },
+)
+async def change_password(
+    data: PasswordChangeRequest, user: CurrentUser, db: DbSession
+) -> MessageResponse:
+    # 400, not 401: a 401 would make the client think its token has expired.
+    if not await asyncio.to_thread(
+        verify_password, data.old_password, user.hashed_password
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=WRONG_PASSWORD
+        )
+    # The old password is known to be correct here, so comparing the plain
+    # strings is enough (no second slow hash check).
+    if data.new_password == data.old_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=SAME_PASSWORD
+        )
+
+    await crud.set_password(db, user, data.new_password)
+    return MessageResponse(
+        message="Password changed successfully. Log in again with the new password."
+    )
+
+
+@router.post(
+    "/password-reset/request",
+    summary="Request a password reset email",
+    description=(
+        "For a forgotten password. If the email belongs to an active account, "
+        "sends a link with a reset token valid for "
+        f"{RESET_TTL_MINUTES} minutes. "
+        "A new request invalidates the previous link.\n\n"
+        "Always returns the same response, so it cannot be used to check "
+        "whether an email is registered. An account that is not activated "
+        "yet gets no email: activate it first via "
+        "`POST /accounts/resend-activation`."
+    ),
+)
+async def request_password_reset(
+    data: PasswordResetRequest, db: DbSession
+) -> MessageResponse:
+    user = await crud.get_user_by_email(db, data.email)
+    if user is not None and user.is_active:
+        token = await crud.issue_password_reset_token(db, user.id)
+        queue_password_reset_email(user, token)
+
+    return MessageResponse(
+        message=(
+            "If the account exists and is active, "
+            "a password reset link has been sent."
+        )
+    )
+
+
+@router.post(
+    "/password-reset/confirm",
+    summary="Set a new password with a reset token",
+    description=(
+        "Sets a new password using the email and the token from the password "
+        "reset email; the old password is not needed. The token is single-use "
+        f"and expires {RESET_TTL_MINUTES} minutes after it was issued.\n\n"
+        "All sessions of the user are logged out, so they have to log in "
+        "again with the new password.\n\n"
+        "Password requirements: at least 8 characters, one uppercase letter, "
+        "one lowercase letter, one digit and one special character."
+    ),
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "The email or token is wrong, the token has expired "
+            "or has already been used."
+        },
+    },
+)
+async def confirm_password_reset(
+    data: PasswordResetConfirmRequest, db: DbSession
+) -> MessageResponse:
+    user = await crud.use_password_reset_token(db, data.email, data.token)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_RESET_TOKEN
+        )
+
+    await crud.set_password(db, user, data.new_password)
+    return MessageResponse(
+        message="Password has been reset successfully. "
+        "Log in with the new password."
+    )
 
 
 @router.patch(

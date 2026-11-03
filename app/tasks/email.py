@@ -32,3 +32,20 @@ def send_activation_email(email: str, token: str) -> None:
         f"The link is valid for {hours} hours."
     )
     send_email(email, "Activate your account", body)
+
+
+@celery_app.task(autoretry_for=(OSError,), retry_backoff=True, max_retries=3)
+def send_password_reset_email(email: str, token: str) -> None:
+    query = urlencode({"email": email, "token": token})
+    link = f"{settings.frontend_url}/reset-password?{query}"
+    minutes = settings.password_reset_token_expire_minutes
+
+    body = (
+        "Someone asked to reset the password of your Online Cinema account.\n\n"
+        "To set a new password, open the link below:\n"
+        f"{link}\n\n"
+        f"Reset token: {token}\n\n"
+        f"The link is valid for {minutes} minutes and can be used once.\n"
+        "If it wasn't you, just ignore this email: your password stays the same."
+    )
+    send_email(email, "Reset your password", body)

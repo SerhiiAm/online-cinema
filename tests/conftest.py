@@ -58,8 +58,8 @@ async def db_engine(test_database: None) -> AsyncGenerator[AsyncEngine, None]:
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE users, activation_tokens, refresh_tokens "
-                "RESTART IDENTITY"
+                "TRUNCATE users, activation_tokens, refresh_tokens, "
+                "password_reset_tokens RESTART IDENTITY"
             )
         )
     await engine.dispose()
@@ -79,8 +79,16 @@ def send_activation_email_mock() -> Generator[MagicMock, None, None]:
 
 
 @pytest.fixture
+def send_password_reset_email_mock() -> Generator[MagicMock, None, None]:
+    with patch("app.routers.accounts.send_password_reset_email.delay") as mock:
+        yield mock
+
+
+@pytest.fixture
 async def client(
-    db_engine: AsyncEngine, send_activation_email_mock: MagicMock
+    db_engine: AsyncEngine,
+    send_activation_email_mock: MagicMock,
+    send_password_reset_email_mock: MagicMock,
 ) -> AsyncGenerator[AsyncClient, None]:
     session_maker = async_sessionmaker(db_engine, expire_on_commit=False)
 

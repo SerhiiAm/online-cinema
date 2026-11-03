@@ -31,6 +31,13 @@ def delete_expired_activation_tokens() -> int:
 
 
 @celery_app.task
+def delete_expired_password_reset_tokens() -> int:
+    deleted = asyncio.run(_run_with_db(crud.delete_expired_password_reset_tokens))
+    logger.info("Deleted %d expired password reset tokens", deleted)
+    return deleted
+
+
+@celery_app.task
 def delete_expired_refresh_tokens() -> int:
     deleted = asyncio.run(_run_with_db(crud.delete_expired_refresh_tokens))
     logger.info("Deleted %d expired refresh tokens", deleted)

@@ -1,4 +1,5 @@
 import enum
+import hashlib
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -41,6 +42,13 @@ def verify_password(password: str, hashed_password: str) -> bool:
 
 def generate_token() -> str:
     return secrets.token_urlsafe(TOKEN_BYTES)
+
+
+def hash_token(token: str) -> str:
+    # sha256 instead of argon2: the token is random (not a guessable password),
+    # so a fast unsalted hash is safe, and the same input always gives
+    # the same hash, so the DB row can be found by it.
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def _now() -> datetime:

@@ -2,13 +2,20 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import ScalarSelect, delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.core.config import settings
-from app.core.security import create_refresh_token, generate_token, hash_password
+from app.core.security import (
+    create_refresh_token,
+    generate_token,
+    hash_password,
+    hash_token,
+)
 from app.models.accounts import (
     ActivationToken,
+    PasswordResetToken,
     RefreshToken,
     User,
     UserGroup,
@@ -110,16 +117,18 @@ async def change_user_group(
 async def refresh_activation_token(
     db: AsyncSession, user: User
 ) -> ActivationToken:
-    await db.execute(
-        delete(ActivationToken).where(ActivationToken.user_id == user.id)
+    # Upsert instead of delete + insert: two parallel resends would both
+    # delete, then the second insert would hit UNIQUE(user_id) -> 500.
+    values = {"token": generate_token(), "expires_at": _activation_expires_at()}
+    activation_token = await db.scalar(
+        insert(ActivationToken)
+        .values(user_id=user.id, **values)
+        .on_conflict_do_update(index_elements=["user_id"], set_=values)
+        .returning(ActivationToken)
+        # The row keeps its id, so a copy already in the session
+        # must be overwritten with the new token, not returned as is.
+        .execution_options(populate_existing=True)
     )
-    activation_token = ActivationToken(
-        user_id=user.id,
-        token=generate_token(),
-        expires_at=_activation_expires_at(),
-    )
-
-    db.add(activation_token)
     await db.commit()
     return activation_token
 
@@ -176,11 +185,71 @@ async def revoke_all_refresh_tokens(db: AsyncSession, user_id: int) -> None:
     await db.commit()
 
 
+async def issue_password_reset_token(db: AsyncSession, user_id: int) -> str:
+    # One token per user, so a new request makes the previous email useless.
+    # Upsert instead of delete + insert: two parallel requests would both
+    # delete, then the second insert would hit UNIQUE(user_id) -> 500.
+    token = generate_token()
+    values = {
+        "token": hash_token(token),
+        "expires_at": datetime.now(timezone.utc)
+        + timedelta(minutes=settings.password_reset_token_expire_minutes),
+    }
+    await db.execute(
+        insert(PasswordResetToken)
+        .values(user_id=user_id, **values)
+        .on_conflict_do_update(index_elements=["user_id"], set_=values)
+    )
+    await db.commit()
+    return token
+
+
+async def use_password_reset_token(
+    db: AsyncSession, email: str, token: str
+) -> User | None:
+    # Check and use up the token in one DELETE: of two parallel requests
+    # with the same token Postgres lets only one delete the row.
+    # Not committed here: set_password commits it together with the new
+    # password, so a failed request leaves the token usable.
+    user_id = await db.scalar(
+        delete(PasswordResetToken)
+        .where(
+            PasswordResetToken.user_id
+            == select(User.id).where(User.email == email.lower()).scalar_subquery(),
+            PasswordResetToken.token == hash_token(token),
+            PasswordResetToken.expires_at > func.now(),
+        )
+        .returning(PasswordResetToken.user_id)
+    )
+    if user_id is None:
+        return None
+    return await get_user_by_id(db, user_id)
+
+
+async def set_password(db: AsyncSession, user: User, password: str) -> None:
+    # One transaction: the new password, no pending reset link (an old email
+    # must not undo the change) and every session logged out.
+    user.hashed_password = await asyncio.to_thread(hash_password, password)
+    await db.execute(
+        delete(PasswordResetToken).where(PasswordResetToken.user_id == user.id)
+    )
+    # Commits everything above together with the revoke.
+    await revoke_all_refresh_tokens(db, user.id)
+
+
 async def delete_expired_activation_tokens(db: AsyncSession) -> int:
     result = await db.execute(
         delete(ActivationToken).where(
             ActivationToken.expires_at < datetime.now(timezone.utc)
         )
+    )
+    await db.commit()
+    return result.rowcount
+
+
+async def delete_expired_password_reset_tokens(db: AsyncSession) -> int:
+    result = await db.execute(
+        delete(PasswordResetToken).where(PasswordResetToken.expires_at < func.now())
     )
     await db.commit()
     return result.rowcount

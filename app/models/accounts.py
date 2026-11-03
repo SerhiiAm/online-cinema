@@ -42,6 +42,9 @@ class User(Base):
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
         back_populates="user", passive_deletes=True
     )
+    password_reset_token: Mapped["PasswordResetToken | None"] = relationship(
+        back_populates="user", passive_deletes=True
+    )
 
 
 class ActivationToken(Base):
@@ -70,3 +73,17 @@ class RefreshToken(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     user: Mapped[User] = relationship(back_populates="refresh_tokens")
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True
+    )
+    # sha256 hex of the token from the email, never the token itself:
+    # a DB leak must not let anyone reset passwords.
+    token: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    user: Mapped[User] = relationship(back_populates="password_reset_token")

@@ -5,6 +5,7 @@ import pytest
 
 from app.tasks.accounts import (
     delete_expired_activation_tokens,
+    delete_expired_password_reset_tokens,
     delete_expired_refresh_tokens,
 )
 from tests.conftest import TEST_DATABASE_URL
@@ -18,6 +19,11 @@ TASKS = [
     ),
     pytest.param(
         delete_expired_refresh_tokens, "delete_expired_refresh_tokens", id="refresh"
+    ),
+    pytest.param(
+        delete_expired_password_reset_tokens,
+        "delete_expired_password_reset_tokens",
+        id="password-reset",
     ),
 ]
 

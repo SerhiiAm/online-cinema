@@ -16,10 +16,12 @@ from app.core.security import (
     decode_token,
     generate_token,
     hash_password,
+    hash_token,
     verify_password,
 )
 
 PASSWORD = "Str0ng!pass"
+SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 URL_SAFE_CHARS = re.compile(r"^[A-Za-z0-9_-]+$")
 USER_ID = 5
 WRONG_SECRET_KEY = "another-secret-key-that-is-long-enough-0123456789"
@@ -84,6 +86,29 @@ def test_generate_token_returns_unique_values() -> None:
     tokens = {generate_token() for _ in range(1000)}
 
     assert len(tokens) == 1000
+
+
+def test_hash_token_fits_db_column_and_hides_token() -> None:
+    token = generate_token()
+
+    token_hash = hash_token(token)
+
+    # password_reset_tokens.token is String(64)
+    assert SHA256_HEX.match(token_hash)
+    assert token not in token_hash
+
+
+def test_hash_token_is_deterministic() -> None:
+    # The DB row is looked up by the hash, so it must not be salted.
+    token = generate_token()
+
+    assert hash_token(token) == hash_token(token)
+
+
+def test_hash_token_differs_for_different_tokens() -> None:
+    hashes = {hash_token(generate_token()) for _ in range(1000)}
+
+    assert len(hashes) == 1000
 
 
 def test_create_access_token_has_expected_claims() -> None:

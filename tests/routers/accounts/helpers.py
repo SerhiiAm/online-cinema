@@ -8,9 +8,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.security import TokenType
+from app.core.security import TokenType, generate_token, hash_token
 from app.models.accounts import (
     ActivationToken,
+    PasswordResetToken,
     RefreshToken,
     User,
     UserGroup,
@@ -65,6 +66,29 @@ async def logout(client: AsyncClient, refresh_token: str) -> Response:
 async def get_me(client: AsyncClient, access_token: str) -> Response:
     return await client.get(
         "/accounts/me", headers={"Authorization": f"Bearer {access_token}"}
+    )
+
+
+async def change_password(
+    client: AsyncClient, access_token: str, old_password: str, new_password: str
+) -> Response:
+    return await client.post(
+        "/accounts/change-password",
+        json={"old_password": old_password, "new_password": new_password},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+
+async def request_reset(client: AsyncClient, email: str = EMAIL) -> Response:
+    return await client.post("/accounts/password-reset/request", json={"email": email})
+
+
+async def confirm_reset(
+    client: AsyncClient, token: str, new_password: str, email: str = EMAIL
+) -> Response:
+    return await client.post(
+        "/accounts/password-reset/confirm",
+        json={"email": email, "token": token, "new_password": new_password},
     )
 
 
@@ -134,6 +158,30 @@ async def get_refresh_tokens(db: AsyncSession) -> list[RefreshToken]:
         await db.scalars(
             select(RefreshToken)
             .order_by(RefreshToken.id)
+            .execution_options(populate_existing=True)
+        )
+    )
+
+
+async def add_reset_token(db: AsyncSession, user_id: int) -> str:
+    """Saves a valid reset token for the user, returns the raw token."""
+    token = generate_token()
+    db.add(
+        PasswordResetToken(
+            user_id=user_id,
+            token=hash_token(token),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+    )
+    await db.commit()
+    return token
+
+
+async def get_reset_tokens(db: AsyncSession) -> list[PasswordResetToken]:
+    return list(
+        await db.scalars(
+            select(PasswordResetToken)
+            .order_by(PasswordResetToken.id)
             .execution_options(populate_existing=True)
         )
     )

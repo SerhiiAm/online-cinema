@@ -46,6 +46,22 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PasswordChangeRequest(BaseModel):
+    # Not StrongPassword: the old password is only compared with the hash.
+    old_password: str
+    new_password: StrongPassword
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    email: EmailStr
+    token: str
+    new_password: StrongPassword
+
+
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
