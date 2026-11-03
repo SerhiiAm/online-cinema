@@ -43,11 +43,13 @@ async def remaining_token_ids(db: AsyncSession) -> set[int]:
 async def test_delete_expired_tokens_keeps_valid_ones(db_session: AsyncSession) -> None:
     await create_user_with_token(db_session, "old@example.com", expired=True)
     valid = await create_user_with_token(db_session, "new@example.com", expired=False)
+    valid_id = valid.id  # rollback() below expires the object
 
     deleted = await delete_expired_activation_tokens(db_session)
 
     assert deleted == 1
-    assert await remaining_token_ids(db_session) == {valid.id}
+    await db_session.rollback()  # only a committed delete survives this
+    assert await remaining_token_ids(db_session) == {valid_id}
 
 
 async def test_delete_expired_tokens_keeps_users(db_session: AsyncSession) -> None:
@@ -104,12 +106,15 @@ async def test_delete_expired_refresh_tokens_keeps_unexpired_ones(
         token.user_id = user.id
     db_session.add_all(tokens.values())
     await db_session.commit()
+    # rollback() below expires the objects, so read the jti values now.
+    kept = {tokens["valid"].jti, tokens["revoked_not_expired"].jti}
 
     deleted = await delete_expired_refresh_tokens(db_session)
 
     assert deleted == 2
+    await db_session.rollback()  # only a committed delete survives this
     remaining = set(await db_session.scalars(select(RefreshToken.jti)))
-    assert remaining == {tokens["valid"].jti, tokens["revoked_not_expired"].jti}
+    assert remaining == kept
 
 
 async def test_set_password_affects_only_this_user(db_session: AsyncSession) -> None:
