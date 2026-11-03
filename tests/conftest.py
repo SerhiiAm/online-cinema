@@ -58,8 +58,8 @@ async def db_engine(test_database: None) -> AsyncGenerator[AsyncEngine, None]:
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE users, activation_tokens, refresh_tokens "
-                "RESTART IDENTITY"
+                "TRUNCATE users, activation_tokens, refresh_tokens, "
+                "password_reset_tokens RESTART IDENTITY"
             )
         )
     await engine.dispose()
