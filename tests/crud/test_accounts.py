@@ -10,6 +10,7 @@ from app.crud.accounts import (
     delete_expired_refresh_tokens,
     get_user_by_id,
     promote_to_admin,
+    refresh_activation_token,
     set_password,
 )
 from app.models.accounts import (
@@ -143,3 +144,19 @@ async def test_set_password_affects_only_this_user(db_session: AsyncSession) -> 
     assert revoked == {target.id: True, other.id: False}
     reset_owners = set(await db_session.scalars(select(PasswordResetToken.user_id)))
     assert reset_owners == {other.id}
+
+
+async def test_refresh_activation_token_returns_new_token_when_old_is_loaded(
+    db_session: AsyncSession,
+) -> None:
+    # The upsert keeps the row id; the old object already in the session
+    # must not be returned, or the email would carry the dead token.
+    old = await create_user_with_token(db_session, "user@example.com", expired=False)
+    old_value = old.token
+
+    new = await refresh_activation_token(db_session, old.user)
+
+    stored = await db_session.scalar(
+        select(ActivationToken.token).execution_options(populate_existing=True)
+    )
+    assert new.token == stored != old_value

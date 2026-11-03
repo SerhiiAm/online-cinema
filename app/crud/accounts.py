@@ -117,16 +117,18 @@ async def change_user_group(
 async def refresh_activation_token(
     db: AsyncSession, user: User
 ) -> ActivationToken:
-    await db.execute(
-        delete(ActivationToken).where(ActivationToken.user_id == user.id)
+    # Upsert instead of delete + insert: two parallel resends would both
+    # delete, then the second insert would hit UNIQUE(user_id) -> 500.
+    values = {"token": generate_token(), "expires_at": _activation_expires_at()}
+    activation_token = await db.scalar(
+        insert(ActivationToken)
+        .values(user_id=user.id, **values)
+        .on_conflict_do_update(index_elements=["user_id"], set_=values)
+        .returning(ActivationToken)
+        # The row keeps its id, so a copy already in the session
+        # must be overwritten with the new token, not returned as is.
+        .execution_options(populate_existing=True)
     )
-    activation_token = ActivationToken(
-        user_id=user.id,
-        token=generate_token(),
-        expires_at=_activation_expires_at(),
-    )
-
-    db.add(activation_token)
     await db.commit()
     return activation_token
 

@@ -288,6 +288,24 @@ async def test_resend_sends_email_with_new_token(
     send_activation_email_mock.assert_called_once_with(EMAIL, new_token.token)
 
 
+async def test_concurrent_resends_keep_one_working_token(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    activation_token: str,
+    send_activation_email_mock: MagicMock,
+) -> None:
+    send_activation_email_mock.reset_mock()
+
+    responses = await asyncio.gather(resend(client), resend(client))
+
+    assert [r.status_code for r in responses] == [200, 200]
+    sent = {call.args[1] for call in send_activation_email_mock.call_args_list}
+    stored = await get_token(db_session)
+    # The token from one of the two emails works.
+    assert stored.token in sent
+    assert (await activate(client, stored.token)).status_code == 200
+
+
 @pytest.mark.parametrize(
     "activate_first, email",
     [(True, EMAIL), (False, "nobody@example.com")],
