@@ -247,6 +247,14 @@ async def delete_expired_activation_tokens(db: AsyncSession) -> int:
     return result.rowcount
 
 
+async def delete_expired_password_reset_tokens(db: AsyncSession) -> int:
+    result = await db.execute(
+        delete(PasswordResetToken).where(PasswordResetToken.expires_at < func.now())
+    )
+    await db.commit()
+    return result.rowcount
+
+
 async def delete_expired_refresh_tokens(db: AsyncSession) -> int:
     # Only expired rows: a revoked but not yet expired token must stay,
     # otherwise its reuse would no longer be detected on /refresh.

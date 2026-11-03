@@ -7,6 +7,7 @@ from app.core.security import verify_password
 from app.crud.accounts import (
     create_user,
     delete_expired_activation_tokens,
+    delete_expired_password_reset_tokens,
     delete_expired_refresh_tokens,
     get_user_by_id,
     promote_to_admin,
@@ -160,3 +161,29 @@ async def test_refresh_activation_token_returns_new_token_when_old_is_loaded(
         select(ActivationToken.token).execution_options(populate_existing=True)
     )
     assert new.token == stored != old_value
+
+
+async def test_delete_expired_password_reset_tokens_keeps_valid_ones(
+    db_session: AsyncSession,
+) -> None:
+    now = datetime.now(timezone.utc)
+    expires = {
+        "expired@example.com": now - timedelta(minutes=1),
+        "valid@example.com": now + timedelta(minutes=30),
+    }
+    for i, (email, expires_at) in enumerate(expires.items()):
+        user, _ = await create_user(db_session, email, PASSWORD)
+        db_session.add(
+            PasswordResetToken(
+                user_id=user.id, token=str(i) * 64, expires_at=expires_at
+            )
+        )
+    await db_session.commit()
+
+    deleted = await delete_expired_password_reset_tokens(db_session)
+
+    assert deleted == 1
+    await db_session.rollback()  # only a committed delete survives this
+    remaining = list(await db_session.scalars(select(PasswordResetToken.token)))
+    assert remaining == ["1" * 64]
+    assert await db_session.scalar(select(func.count()).select_from(User)) == 2
