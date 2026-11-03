@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
 
     activation_token_expire_hours: int = 24
+    password_reset_token_expire_minutes: int = 60
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
