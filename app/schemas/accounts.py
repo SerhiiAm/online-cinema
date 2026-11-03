@@ -56,6 +56,12 @@ class PasswordResetRequest(BaseModel):
     email: EmailStr
 
 
+class PasswordResetConfirmRequest(BaseModel):
+    email: EmailStr
+    token: str
+    new_password: StrongPassword
+
+
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 

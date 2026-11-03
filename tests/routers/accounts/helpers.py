@@ -83,6 +83,15 @@ async def request_reset(client: AsyncClient, email: str = EMAIL) -> Response:
     return await client.post("/accounts/password-reset/request", json={"email": email})
 
 
+async def confirm_reset(
+    client: AsyncClient, token: str, new_password: str, email: str = EMAIL
+) -> Response:
+    return await client.post(
+        "/accounts/password-reset/confirm",
+        json={"email": email, "token": token, "new_password": new_password},
+    )
+
+
 async def change_group(
     client: AsyncClient, access_token: str, user_id: int, group: str
 ) -> Response:

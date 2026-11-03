@@ -204,6 +204,28 @@ async def issue_password_reset_token(db: AsyncSession, user_id: int) -> str:
     return token
 
 
+async def use_password_reset_token(
+    db: AsyncSession, email: str, token: str
+) -> User | None:
+    # Check and use up the token in one DELETE: of two parallel requests
+    # with the same token Postgres lets only one delete the row.
+    # Not committed here: set_password commits it together with the new
+    # password, so a failed request leaves the token usable.
+    user_id = await db.scalar(
+        delete(PasswordResetToken)
+        .where(
+            PasswordResetToken.user_id
+            == select(User.id).where(User.email == email.lower()).scalar_subquery(),
+            PasswordResetToken.token == hash_token(token),
+            PasswordResetToken.expires_at > func.now(),
+        )
+        .returning(PasswordResetToken.user_id)
+    )
+    if user_id is None:
+        return None
+    return await get_user_by_id(db, user_id)
+
+
 async def set_password(db: AsyncSession, user: User, password: str) -> None:
     # One transaction: the new password, no pending reset link (an old email
     # must not undo the change) and every session logged out.

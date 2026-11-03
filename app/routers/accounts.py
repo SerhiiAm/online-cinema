@@ -26,6 +26,7 @@ from app.schemas.accounts import (
     LoginRequest,
     MessageResponse,
     PasswordChangeRequest,
+    PasswordResetConfirmRequest,
     PasswordResetRequest,
     RefreshTokenRequest,
     ResendActivationRequest,
@@ -58,6 +59,7 @@ USER_NOT_FOUND = "User not found."
 ADMIN_GROUP_LOCKED = "Admin accounts can only be changed on the server."
 WRONG_PASSWORD = "Current password is incorrect."
 SAME_PASSWORD = "New password must be different from the current one."
+INVALID_RESET_TOKEN = "Invalid or expired password reset token."
 
 
 def queue_activation_email(user: User, token: str) -> None:
@@ -397,6 +399,41 @@ async def request_password_reset(
             "If the account exists and is active, "
             "a password reset link has been sent."
         )
+    )
+
+
+@router.post(
+    "/password-reset/confirm",
+    summary="Set a new password with a reset token",
+    description=(
+        "Sets a new password using the email and the token from the password "
+        "reset email; the old password is not needed. The token is single-use "
+        f"and expires {RESET_TTL_MINUTES} minutes after it was issued.\n\n"
+        "All sessions of the user are logged out, so they have to log in "
+        "again with the new password.\n\n"
+        "Password requirements: at least 8 characters, one uppercase letter, "
+        "one lowercase letter, one digit and one special character."
+    ),
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "The email or token is wrong, the token has expired "
+            "or has already been used."
+        },
+    },
+)
+async def confirm_password_reset(
+    data: PasswordResetConfirmRequest, db: DbSession
+) -> MessageResponse:
+    user = await crud.use_password_reset_token(db, data.email, data.token)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_RESET_TOKEN
+        )
+
+    await crud.set_password(db, user, data.new_password)
+    return MessageResponse(
+        message="Password has been reset successfully. "
+        "Log in with the new password."
     )
 
 
