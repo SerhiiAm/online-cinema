@@ -125,6 +125,11 @@ class Movie(Base):
     )
 
     certification: Mapped[Certification] = relationship()
-    genres: Mapped[list[Genre]] = relationship(secondary=movie_genres)
-    stars: Mapped[list[Star]] = relationship(secondary=movie_stars)
-    directors: Mapped[list[Director]] = relationship(secondary=movie_directors)
+    # Sorted by name, so a movie always shows its lists in the same order.
+    genres: Mapped[list[Genre]] = relationship(
+        secondary=movie_genres, order_by=Genre.name
+    )
+    stars: Mapped[list[Star]] = relationship(secondary=movie_stars, order_by=Star.name)
+    directors: Mapped[list[Director]] = relationship(
+        secondary=movie_directors, order_by=Director.name
+    )
