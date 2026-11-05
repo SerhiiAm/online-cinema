@@ -4,7 +4,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import PERMISSION_DENIED
+from app.core.dependencies import MAX_DB_ID, PERMISSION_DENIED
 from app.crud.accounts import promote_to_admin
 from app.models.accounts import User, UserGroupEnum
 from app.routers.accounts import ADMIN_GROUP_LOCKED, USER_NOT_FOUND
@@ -109,6 +109,20 @@ async def test_change_group_of_unknown_user_returns_404(
 
     assert response.status_code == 404
     assert response.json() == {"detail": USER_NOT_FOUND}
+
+
+@pytest.mark.parametrize("action", ["change group", "activate"])
+async def test_user_id_out_of_db_range_returns_422(
+    client: AsyncClient, admin_token: str, action: str
+) -> None:
+    # Bigger than a PostgreSQL integer: used to reach the DB and fail with 500.
+    user_id = MAX_DB_ID + 1
+    if action == "change group":
+        response = await change_group(client, admin_token, user_id, "moderator")
+    else:
+        response = await activate_by_admin(client, admin_token, user_id)
+
+    assert response.status_code == 422
 
 
 @pytest.mark.parametrize("caller_group", [UserGroupEnum.USER, UserGroupEnum.MODERATOR])

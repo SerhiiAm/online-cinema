@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Path, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,12 @@ GROUP_LEVELS = {
     UserGroupEnum.MODERATOR: 2,
     UserGroupEnum.ADMIN: 3,
 }
+
+# Largest value of a PostgreSQL `integer` column (our ids). A bigger id in
+# the URL would make the DB driver fail -> 500, so it is rejected as a 422.
+MAX_DB_ID = 2_147_483_647
+
+PathId = Annotated[int, Path(ge=1, le=MAX_DB_ID)]
 
 # Adds the "Authorize" button to Swagger; a missing header -> 401.
 bearer_scheme = HTTPBearer(
