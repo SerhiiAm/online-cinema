@@ -1,6 +1,8 @@
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 
 from app.core.config import settings
+from app.core.exception_handlers import validation_exception_handler
 from app.routers import accounts, movies, references
 
 app = FastAPI(
@@ -8,6 +10,8 @@ app = FastAPI(
     description="Async online cinema REST API",
     version="0.1.0",
 )
+
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 app.include_router(accounts.router)
 app.include_router(movies.router)

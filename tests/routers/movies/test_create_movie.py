@@ -1,6 +1,7 @@
 """POST /movies."""
 
 import asyncio
+import json
 from datetime import date
 from typing import Any
 
@@ -248,6 +249,33 @@ async def test_invalid_values_return_422(
 ) -> None:
     response = await client.post(
         "/movies", json=movie_body(refs, **changes), headers=auth(moderator_token)
+    )
+
+    assert response.status_code == 422
+    assert await count_rows(db_session) == NOTHING_SAVED
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("gross", "Infinity"), ("meta_score", "NaN"), ("imdb", "-Infinity")],
+)
+async def test_nan_and_infinity_numbers_return_422(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    moderator_token: str,
+    refs: dict[str, int],
+    field: str,
+    value: str,
+) -> None:
+    # Valid JSON for Python, but Infinity would pass `gross >= 0` and be
+    # saved. Sent as raw text: httpx refuses to write these values.
+    body = json.dumps(movie_body(refs, **{field: 0}))
+    body = body.replace(f'"{field}": 0', f'"{field}": {value}')
+
+    response = await client.post(
+        "/movies",
+        content=body,
+        headers={**auth(moderator_token), "Content-Type": "application/json"},
     )
 
     assert response.status_code == 422
