@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from app.core.config import settings
-from app.routers import accounts
+from app.routers import accounts, references
 
 app = FastAPI(
     title=settings.app_name,
@@ -10,6 +10,8 @@ app = FastAPI(
 )
 
 app.include_router(accounts.router)
+for reference_router in references.routers:
+    app.include_router(reference_router)
 
 
 @app.get("/health", tags=["Health"])
