@@ -58,6 +58,10 @@ MAX_LIST_IDS = 50
 IdList = Annotated[
     list[DbId], Field(max_length=MAX_LIST_IDS), AfterValidator(_without_duplicates)
 ]
+# Every movie has a genre and a director (a nature documentary may have
+# no stars): without them it would be missing from the genre filter and
+# the director search.
+RequiredIdList = Annotated[IdList, Field(min_length=1)]
 # JSON allows Infinity and NaN, and Infinity would pass ge=0 and be saved.
 Number = Annotated[float, Field(allow_inf_nan=False)]
 MovieYear = Annotated[
@@ -90,9 +94,9 @@ class MovieCreate(BaseModel):
     description: Description
     price: Price
     certification_id: DbId
-    genre_ids: IdList = []
+    genre_ids: RequiredIdList
     star_ids: IdList = []
-    director_ids: IdList = []
+    director_ids: RequiredIdList
 
 
 class NamedItem(BaseModel):

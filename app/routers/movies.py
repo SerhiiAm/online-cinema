@@ -41,7 +41,8 @@ def _format_missing(missing: dict[str, list[int]]) -> str:
     summary="Create a movie (moderator or admin)",
     description=(
         "The certification, genres, stars and directors are passed by id: "
-        "create them first in their own sections. Repeated ids in a list "
+        "create them first in their own sections. At least one genre and one "
+        "director are required, stars are optional. Repeated ids in a list "
         "are counted once, spaces around the name are removed. The price "
         "must be above 0 with at most 2 decimal places."
     ),

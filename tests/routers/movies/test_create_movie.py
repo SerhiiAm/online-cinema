@@ -52,6 +52,7 @@ def movie_body(refs: dict[str, int], **changes: Any) -> dict[str, Any]:
         "price": "9.99",
         "certification_id": refs["certification"],
         "genre_ids": [refs["drama"]],
+        "director_ids": [refs["director"]],
     }
     return body | changes
 
@@ -176,8 +177,42 @@ async def test_parallel_create_of_same_movie_saves_one(
         "movies": 1,
         "genres": 1,
         "stars": 0,
-        "directors": 0,
+        "directors": 1,
     }
+
+
+@pytest.mark.parametrize("sent", ["missing", "empty"])
+async def test_movie_without_stars_is_saved(
+    client: AsyncClient, moderator_token: str, refs: dict[str, int], sent: str
+) -> None:
+    body = movie_body(refs)
+    if sent == "empty":
+        body["star_ids"] = []
+
+    response = await client.post("/movies", json=body, headers=auth(moderator_token))
+
+    assert response.status_code == 201
+    assert response.json()["stars"] == []
+
+
+@pytest.mark.parametrize("field", ["genre_ids", "director_ids"])
+@pytest.mark.parametrize("sent", ["missing", "empty"])
+async def test_movie_needs_a_genre_and_a_director(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    moderator_token: str,
+    refs: dict[str, int],
+    field: str,
+    sent: str,
+) -> None:
+    body = movie_body(refs, **{field: []})
+    if sent == "missing":
+        del body[field]
+
+    response = await client.post("/movies", json=body, headers=auth(moderator_token))
+
+    assert response.status_code == 422
+    assert await count_rows(db_session) == NOTHING_SAVED
 
 
 @pytest.mark.parametrize(
