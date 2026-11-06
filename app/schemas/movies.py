@@ -77,26 +77,54 @@ MovieYear = Annotated[
 # customer would pay a price nobody entered. max_digits=10 = Numeric(10, 2).
 Price = Annotated[Decimal, Field(gt=0, max_digits=10, decimal_places=2)]
 Description = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+# Shared by create and update, so an update can't bypass a rule.
+Duration = Annotated[DbInt, Field(ge=1, description="Duration in minutes.")]
+Imdb = Annotated[Number, Field(ge=0, le=10, description="IMDb rating, 0-10.")]
+Votes = Annotated[DbInt, Field(ge=0, description="Number of IMDb votes.")]
+MetaScore = Annotated[
+    Number, Field(ge=0, le=100, description="Metacritic score, 0-100.")
+]
+Gross = Annotated[Number, Field(ge=0, description="Box office revenue in US dollars.")]
 
 
 class MovieCreate(BaseModel):
     name: ReferenceName
     year: MovieYear
-    time: DbInt = Field(ge=1, description="Duration in minutes.")
-    imdb: Number = Field(ge=0, le=10, description="IMDb rating, 0-10.")
-    votes: DbInt = Field(ge=0, description="Number of IMDb votes.")
-    meta_score: Number | None = Field(
-        default=None, ge=0, le=100, description="Metacritic score, 0-100."
-    )
-    gross: Number | None = Field(
-        default=None, ge=0, description="Box office revenue in US dollars."
-    )
+    time: Duration
+    imdb: Imdb
+    votes: Votes
+    meta_score: MetaScore | None = None
+    gross: Gross | None = None
     description: Description
     price: Price
     certification_id: DbId
     genre_ids: RequiredIdList
     star_ids: IdList = []
     director_ids: RequiredIdList
+
+
+class MovieUpdate(BaseModel):
+    """Only the sent fields change.
+
+    The `None` defaults are not validated by Pydantic: an omitted field
+    passes and stays unchanged, while an explicit null fails the type
+    check -> 422 (the DB requires a value). Only meta_score and gross
+    can be cleared with null.
+    """
+
+    name: ReferenceName = None
+    year: MovieYear = None
+    time: Duration = None
+    imdb: Imdb = None
+    votes: Votes = None
+    meta_score: MetaScore | None = None
+    gross: Gross | None = None
+    description: Description = None
+    price: Price = None
+    certification_id: DbId = None
+    genre_ids: RequiredIdList = None
+    star_ids: IdList = None
+    director_ids: RequiredIdList = None
 
 
 class NamedItem(BaseModel):

@@ -1,8 +1,11 @@
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.accounts import UserGroupEnum
+from app.models.movies import Certification, Director, Genre, Star
 from tests.routers.accounts.helpers import (
     activate,
     get_token,
@@ -10,7 +13,13 @@ from tests.routers.accounts.helpers import (
     register,
     set_group,
 )
-from tests.routers.movies.helpers import REFERENCE_CASES, ReferenceCase
+from tests.routers.movies.helpers import (
+    REFERENCE_CASES,
+    ReferenceCase,
+    add_item,
+    auth,
+    movie_body,
+)
 
 
 @pytest.fixture
@@ -35,3 +44,38 @@ async def moderator_token(db_session: AsyncSession, user_token: str) -> str:
 def ref(request: pytest.FixtureRequest) -> ReferenceCase:
     """Runs a test once for each of genres, stars, directors, certifications."""
     return request.param
+
+
+@pytest.fixture
+async def refs(db_session: AsyncSession) -> dict[str, int]:
+    """Ids of a certification, two genres, a star and a director."""
+    items = {
+        "certification": await add_item(db_session, Certification, "PG-13"),
+        "drama": await add_item(db_session, Genre, "Drama"),
+        "action": await add_item(db_session, Genre, "Action"),
+        "star": await add_item(db_session, Star, "Leonardo DiCaprio"),
+        "director": await add_item(db_session, Director, "Christopher Nolan"),
+    }
+    return {key: item.id for key, item in items.items()}
+
+
+@pytest.fixture
+async def movie(
+    client: AsyncClient, moderator_token: str, refs: dict[str, int]
+) -> dict[str, Any]:
+    """A saved movie (Drama, DiCaprio, Nolan) as POST /movies returned it."""
+    body = movie_body(
+        refs, meta_score=74, gross=292_576_195.0, star_ids=[refs["star"]]
+    )
+    response = await client.post("/movies", json=body, headers=auth(moderator_token))
+    assert response.status_code == 201
+    return response.json()
+
+
+@pytest.fixture
+async def demoted_token(
+    db_session: AsyncSession, moderator_token: str, movie: dict[str, Any]
+) -> str:
+    """The moderator who created `movie`, moved back to the `user` group."""
+    await set_group(db_session, UserGroupEnum.USER)
+    return moderator_token

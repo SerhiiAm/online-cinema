@@ -1,4 +1,4 @@
-from sqlalchemy import insert, select
+from sqlalchemy import Table, delete, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -12,9 +12,15 @@ from app.models.movies import (
     movie_genres,
     movie_stars,
 )
-from app.schemas.movies import MovieCreate
+from app.schemas.movies import MovieCreate, MovieUpdate
 
-LIST_FIELDS = ("genre_ids", "star_ids", "director_ids")
+# Link table, its column for the linked item, the request field with ids.
+LINKS = (
+    (movie_genres, "genre_id", "genre_ids"),
+    (movie_stars, "star_id", "star_ids"),
+    (movie_directors, "director_id", "director_ids"),
+)
+LIST_FIELDS = tuple(field for _, _, field in LINKS)
 
 # Everything the movie response shows, loaded right away: lazy loading in
 # async code fails with MissingGreenlet -> 500.
@@ -32,6 +38,17 @@ async def get_movie(db: AsyncSession, movie_id: int) -> Movie | None:
     )
 
 
+async def _add_links(
+    db: AsyncSession, movie_id: int, table: Table, column: str, ids: list[int]
+) -> None:
+    # Core insert, not `movie.genres = [...]`: the ORM would load the items
+    # by id and silently drop unknown ones, the DB foreign key rejects them.
+    if ids:
+        await db.execute(
+            insert(table), [{"movie_id": movie_id, column: id_} for id_ in ids]
+        )
+
+
 async def create_movie(db: AsyncSession, data: MovieCreate) -> int:
     """Nothing is checked beforehand: the DB decides (unique name + year +
     time, existing ids), so a parallel request can't slip past a check.
@@ -42,28 +59,60 @@ async def create_movie(db: AsyncSession, data: MovieCreate) -> int:
         .values(**data.model_dump(exclude=set(LIST_FIELDS)))
         .returning(Movie.id)
     )
-    links = (
-        (movie_genres, "genre_id", data.genre_ids),
-        (movie_stars, "star_id", data.star_ids),
-        (movie_directors, "director_id", data.director_ids),
-    )
-    for table, column, ids in links:
-        if ids:
-            await db.execute(
-                insert(table), [{"movie_id": movie_id, column: id_} for id_ in ids]
-            )
+    for table, column, field in LINKS:
+        await _add_links(db, movie_id, table, column, getattr(data, field))
     await db.commit()
     return movie_id
 
 
-async def find_missing_ids(db: AsyncSession, data: MovieCreate) -> dict[str, list[int]]:
+async def update_movie(db: AsyncSession, movie_id: int, data: MovieUpdate) -> bool:
+    """Returns False if the movie does not exist.
+
+    The movie row is locked first, so a parallel update of the same movie
+    waits: two requests can't mix their genre lists, and an update after
+    a parallel delete finds nothing. Only the id is selected, so the
+    session holds no Movie object that could show the old data later.
+    A sent list replaces the old one. Like create, the DB checks the ids
+    and the unique name + year + time (IntegrityError, nothing saved).
+    """
+    locked_id = await db.scalar(
+        select(Movie.id).where(Movie.id == movie_id).with_for_update()
+    )
+    if locked_id is None:
+        return False
+    changes = data.model_dump(exclude_unset=True, exclude=set(LIST_FIELDS))
+    if changes:
+        await db.execute(update(Movie).where(Movie.id == movie_id).values(**changes))
+    for table, column, field in LINKS:
+        if field in data.model_fields_set:
+            await db.execute(delete(table).where(table.c.movie_id == movie_id))
+            await _add_links(db, movie_id, table, column, getattr(data, field))
+    await db.commit()
+    return True
+
+
+async def delete_movie(db: AsyncSession, movie_id: int) -> bool:
+    """Returns False if the movie does not exist. Its links go by CASCADE."""
+    deleted_id = await db.scalar(
+        delete(Movie).where(Movie.id == movie_id).returning(Movie.id)
+    )
+    await db.commit()
+    return deleted_id is not None
+
+
+async def find_missing_ids(
+    db: AsyncSession, data: MovieCreate | MovieUpdate
+) -> dict[str, list[int]]:
     """Which of the sent ids don't exist, e.g. {"genre_ids": [99]}.
 
     Called only after the DB has rejected the movie, to tell the
-    moderator exactly what to fix.
+    moderator exactly what to fix. Fields not sent in an update are None.
     """
+    certification_ids = (
+        [data.certification_id] if data.certification_id is not None else []
+    )
     checks = (
-        ("certification_id", Certification, [data.certification_id]),
+        ("certification_id", Certification, certification_ids),
         ("genre_ids", Genre, data.genre_ids),
         ("star_ids", Star, data.star_ids),
         ("director_ids", Director, data.director_ids),

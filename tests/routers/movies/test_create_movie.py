@@ -7,71 +7,14 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import MAX_DB_ID, PERMISSION_DENIED
-from app.models.movies import (
-    Certification,
-    Director,
-    Genre,
-    Movie,
-    Star,
-    movie_directors,
-    movie_genres,
-    movie_stars,
-)
 from app.routers.movies import MOVIE_EXISTS, UNKNOWN_IDS
 from app.schemas.movies import MAX_LIST_IDS, MAX_YEARS_AHEAD
-from tests.routers.movies.helpers import add_item, auth
+from tests.routers.movies.helpers import NOTHING_SAVED, auth, count_rows, movie_body
 
 MAX_YEAR = date.today().year + MAX_YEARS_AHEAD
-
-
-@pytest.fixture
-async def refs(db_session: AsyncSession) -> dict[str, int]:
-    """Ids of a certification, two genres, a star and a director."""
-    items = {
-        "certification": await add_item(db_session, Certification, "PG-13"),
-        "drama": await add_item(db_session, Genre, "Drama"),
-        "action": await add_item(db_session, Genre, "Action"),
-        "star": await add_item(db_session, Star, "Leonardo DiCaprio"),
-        "director": await add_item(db_session, Director, "Christopher Nolan"),
-    }
-    return {key: item.id for key, item in items.items()}
-
-
-def movie_body(refs: dict[str, int], **changes: Any) -> dict[str, Any]:
-    body = {
-        "name": "Inception",
-        "year": 2010,
-        "time": 148,
-        "imdb": 8.8,
-        "votes": 2_000_000,
-        "description": "A thief who steals secrets through dreams.",
-        "price": "9.99",
-        "certification_id": refs["certification"],
-        "genre_ids": [refs["drama"]],
-        "director_ids": [refs["director"]],
-    }
-    return body | changes
-
-
-async def count_rows(db: AsyncSession) -> dict[str, int]:
-    await db.rollback()  # see what other sessions committed
-    tables = {
-        "movies": Movie.__table__,
-        "genres": movie_genres,
-        "stars": movie_stars,
-        "directors": movie_directors,
-    }
-    return {
-        name: await db.scalar(select(func.count()).select_from(table))
-        for name, table in tables.items()
-    }
-
-
-NOTHING_SAVED = {"movies": 0, "genres": 0, "stars": 0, "directors": 0}
 
 
 async def test_moderator_creates_movie(
