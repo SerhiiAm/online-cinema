@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.crud.movies import create_movie
 from app.models.movies import (
     Certification,
     Director,
@@ -17,6 +18,7 @@ from app.models.movies import (
     movie_genres,
     movie_stars,
 )
+from app.schemas.movies import MovieCreate
 
 ReferenceItem = Genre | Star | Director | Certification
 
@@ -96,6 +98,18 @@ def movie_body(refs: dict[str, int], **changes: Any) -> dict[str, Any]:
         "director_ids": [refs["director"]],
     }
     return body | changes
+
+
+async def save_movie(
+    db: AsyncSession, refs: dict[str, int], name: str, **changes: Any
+) -> int:
+    """Saves a `movie_body` movie through our own create code."""
+    return await create_movie(db, MovieCreate(**movie_body(refs, name=name, **changes)))
+
+
+def names(page: dict[str, Any]) -> list[str]:
+    """Movie names of a catalog page (the response JSON)."""
+    return [item["name"] for item in page["items"]]
 
 
 async def count_rows(db: AsyncSession) -> dict[str, int]:

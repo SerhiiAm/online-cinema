@@ -1,4 +1,13 @@
-from sqlalchemy import ColumnElement, Table, delete, func, insert, select, update
+from sqlalchemy import (
+    ColumnElement,
+    Table,
+    delete,
+    func,
+    insert,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -13,6 +22,7 @@ from app.models.movies import (
     movie_stars,
 )
 from app.crud.pagination import page_of
+from app.crud.search import contains
 from app.schemas.movies import MovieCreate, MovieListQuery, MovieUpdate
 
 # Link table, its column for the linked item, the request field with ids.
@@ -51,6 +61,16 @@ SORT_COLUMNS = {
 
 def _catalog_filters(query: MovieListQuery) -> list[ColumnElement[bool]]:
     conditions = []
+    if query.search:  # "" = no search
+        text = query.search
+        conditions.append(
+            or_(
+                contains(Movie.name, text),
+                contains(Movie.description, text),
+                Movie.stars.any(contains(Star.name, text)),
+                Movie.directors.any(contains(Director.name, text)),
+            )
+        )
     if query.year_from is not None:
         conditions.append(Movie.year >= query.year_from)
     if query.year_to is not None:

@@ -9,11 +9,9 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import MAX_DB_ID
-from app.crud.movies import create_movie
 from app.models.movies import Movie
-from app.schemas.movies import MovieCreate
 from app.schemas.pagination import PAGE_SIZE
-from tests.routers.movies.helpers import movie_body
+from tests.routers.movies.helpers import names, save_movie
 
 ITEM_FIELDS = (
     "id",
@@ -26,16 +24,6 @@ ITEM_FIELDS = (
     "certification",
     "genres",
 )
-
-
-async def save_movie(
-    db: AsyncSession, refs: dict[str, int], name: str, **changes: Any
-) -> int:
-    return await create_movie(db, MovieCreate(**movie_body(refs, name=name, **changes)))
-
-
-def names(response_json: dict[str, Any]) -> list[str]:
-    return [item["name"] for item in response_json["items"]]
 
 
 NEWEST_FIRST = ["Charlie", "Bravo", "Delta", "Alpha"]  # the `catalog` by year

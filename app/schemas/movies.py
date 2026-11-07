@@ -6,7 +6,7 @@ from uuid import UUID
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 from app.core.dependencies import MAX_DB_ID
-from app.schemas.pagination import PageNumber
+from app.schemas.pagination import PageNumber, SearchText
 
 # Spaces around the name are cut off, so " Drama" can't become a second
 # "Drama"; max_length matches String(255) in the DB (a longer name would
@@ -169,6 +169,11 @@ YearFilter = Annotated[int, Field(ge=0, le=MAX_DB_ID)]
 
 class MovieListQuery(BaseModel):
     page: PageNumber = 1
+    search: SearchText | None = Field(
+        default=None,
+        description="Part of the title, description, a star's or a director's "
+        "name, any case.",
+    )
     year_from: YearFilter | None = None
     year_to: YearFilter | None = None
     imdb_min: Imdb | None = None

@@ -70,6 +70,30 @@ async def test_pages(
 
 
 @pytest.mark.parametrize("ref", PAGINATED_CASES, ids=lambda case: case.path.strip("/"))
+@pytest.mark.parametrize(
+    ("search", "expected"),
+    [
+        ("NOLAN", ["Christopher Nolan", "Nolan Junior"]),
+        ("   ", ["Christopher Nolan", "Jane Campion", "Nolan Junior"]),
+    ],
+)
+async def test_search_by_part_of_name(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    ref: ReferenceCase,
+    search: str,
+    expected: list[str],
+) -> None:
+    for name in ("Nolan Junior", "Jane Campion", "Christopher Nolan"):
+        await add_item(db_session, ref.model, name)
+
+    response = await client.get(ref.path, params={"search": search})
+
+    assert [item["name"] for item in response.json()["items"]] == expected
+    assert response.json()["total"] == len(expected)
+
+
+@pytest.mark.parametrize("ref", PAGINATED_CASES, ids=lambda case: case.path.strip("/"))
 async def test_last_possible_page_is_empty(
     client: AsyncClient, db_session: AsyncSession, ref: ReferenceCase
 ) -> None:

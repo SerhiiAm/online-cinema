@@ -25,7 +25,7 @@ from app.models.movies import (
     movie_stars,
 )
 from app.schemas.movies import ReferenceRequest, ReferenceResponse
-from app.schemas.pagination import PAGE_SIZE, Page, PageNumber
+from app.schemas.pagination import PAGE_SIZE, Page, PageNumber, SearchText
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
@@ -70,13 +70,18 @@ def build_reference_router(
             "",
             summary=f"List {plural} page by page",
             description=f"{list_description} {PAGE_SIZE} per page; `total` "
-            "counts all of them. A page after the last one is empty.",
+            "counts all found ones. A page after the last one is empty.",
         )
         async def list_items_page(
-            db: DbSession, page: Annotated[PageNumber, Query()] = 1
+            db: DbSession,
+            page: Annotated[PageNumber, Query()] = 1,
+            search: Annotated[
+                SearchText | None,
+                Query(description="Part of the name, any case; empty finds all."),
+            ] = None,
         ) -> Page[ReferenceResponse]:
             rows, total = await crud.list_references_page(
-                db, model, movie_column, page
+                db, model, movie_column, page, search
             )
             return Page[ReferenceResponse].model_validate(
                 {"items": rows, "total": total, "page": page}, from_attributes=True

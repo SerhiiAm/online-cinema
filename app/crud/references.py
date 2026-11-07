@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.crud.pagination import page_of
+from app.crud.search import contains
 from app.models.movies import Certification, Director, Genre, Star
 
 ReferenceModel = type[Genre] | type[Star] | type[Director] | type[Certification]
@@ -44,12 +45,19 @@ async def list_references(
 
 
 async def list_references_page(
-    db: AsyncSession, model: ReferenceModel, movie_column: MovieColumn, page: int
+    db: AsyncSession,
+    model: ReferenceModel,
+    movie_column: MovieColumn,
+    page: int,
+    search: str | None = None,
 ) -> tuple[list[Row], int]:
-    """One page and the number of items on all pages. Movies are counted
-    only for the items of the page."""
-    total = await db.scalar(select(func.count()).select_from(model))
-    result = await db.execute(page_of(_sorted_by_name(model, movie_column), page))
+    """One page and the number of found items on all pages. Movies are
+    counted only for the items of the page. An empty search finds all."""
+    conditions = [contains(model.name, search)] if search else []
+    total = await db.scalar(select(func.count()).select_from(model).where(*conditions))
+    result = await db.execute(
+        page_of(_sorted_by_name(model, movie_column).where(*conditions), page)
+    )
     return list(result.all()), total
 
 

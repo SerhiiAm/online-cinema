@@ -90,7 +90,9 @@ async def _movie_response(db: AsyncSession, movie_id: int) -> MovieResponse:
     summary="Browse the movie catalog",
     description=(
         f"{PAGE_SIZE} movies per page; `total` counts the movies on all "
-        "pages. A page after the last one is empty. Filters can be combined; "
+        "pages. A page after the last one is empty. `search` looks for the "
+        "text as a whole (`dark knight`, not `knight dark`); an empty one "
+        "shows everything. Search and filters can be combined; "
         "the year bounds and `imdb_min` are included. Sort by `year`, "
         "`price`, `imdb` or `votes` (popularity); `-` in front means "
         "descending. Newest first by default. No login needed."
