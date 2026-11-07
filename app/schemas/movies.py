@@ -6,13 +6,16 @@ from uuid import UUID
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 from app.core.dependencies import MAX_DB_ID
+from app.core.validators import reject_nul
 from app.schemas.pagination import PageNumber, SearchText
 
 # Spaces around the name are cut off, so " Drama" can't become a second
 # "Drama"; max_length matches String(255) in the DB (a longer name would
 # be a DB error -> 500 instead of a 422). Movie names use the same rule.
 ReferenceName = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
+    AfterValidator(reject_nul),
 ]
 
 
@@ -77,7 +80,11 @@ MovieYear = Annotated[
 # decimal_places=2: the DB would silently round 9.999 to 10.00, so the
 # customer would pay a price nobody entered. max_digits=10 = Numeric(10, 2).
 Price = Annotated[Decimal, Field(gt=0, max_digits=10, decimal_places=2)]
-Description = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+Description = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1),
+    AfterValidator(reject_nul),
+]
 # Shared by create and update, so an update can't bypass a rule.
 Duration = Annotated[DbInt, Field(ge=1, description="Duration in minutes.")]
 Imdb = Annotated[Number, Field(ge=0, le=10, description="IMDb rating, 0-10.")]

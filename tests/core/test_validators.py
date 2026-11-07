@@ -1,6 +1,11 @@
 import pytest
 
-from app.core.validators import MIN_PASSWORD_LENGTH, validate_password_strength
+from app.core.validators import (
+    MIN_PASSWORD_LENGTH,
+    NUL_NOT_ALLOWED,
+    reject_nul,
+    validate_password_strength,
+)
 
 SHORTEST_VALID = "Aa1!" + "a" * (MIN_PASSWORD_LENGTH - 4)
 TOO_SHORT = SHORTEST_VALID[:-1]
@@ -37,3 +42,15 @@ def test_valid_password_is_returned_unchanged(password: str) -> None:
 def test_invalid_password_raises_value_error(password: str, error: str) -> None:
     with pytest.raises(ValueError, match=error):
         validate_password_strength(password)
+
+
+@pytest.mark.parametrize("text", ["\x00", "a\x00", "\x00a", "a\x00b"])
+def test_nul_anywhere_is_rejected(text: str) -> None:
+    with pytest.raises(ValueError) as error:
+        reject_nul(text)
+    assert str(error.value) == NUL_NOT_ALLOWED
+
+
+@pytest.mark.parametrize("text", ["", "Drama", "Тёмный \\0 рыцарь 🎬"])
+def test_text_without_nul_is_returned_unchanged(text: str) -> None:
+    assert reject_nul(text) == text

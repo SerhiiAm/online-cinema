@@ -2,9 +2,10 @@
 
 from typing import Annotated
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 
 from app.core.dependencies import MAX_DB_ID
+from app.core.validators import reject_nul
 
 PAGE_SIZE = 10
 # A bigger number would be rejected by the DB driver -> 500.
@@ -13,7 +14,9 @@ PageNumber = Annotated[int, Field(ge=1, le=MAX_DB_ID)]
 # search box on any site. Names are at most 255 long, so a longer text
 # could only match a description and would just make the DB work harder.
 SearchText = Annotated[
-    str, StringConstraints(strip_whitespace=True, max_length=255)
+    str,
+    StringConstraints(strip_whitespace=True, max_length=255),
+    AfterValidator(reject_nul),
 ]
 
 
