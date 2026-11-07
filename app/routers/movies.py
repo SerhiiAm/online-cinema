@@ -1,13 +1,20 @@
 from typing import Annotated, NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import ModeratorUser, PathId
 from app.crud import movies as crud
-from app.schemas.movies import MovieCreate, MovieResponse, MovieUpdate
+from app.schemas.movies import (
+    PAGE_SIZE,
+    MovieCreate,
+    MovieListQuery,
+    MoviePage,
+    MovieResponse,
+    MovieUpdate,
+)
 
 router = APIRouter(prefix="/movies", tags=["Movies"])
 
@@ -76,6 +83,26 @@ async def _movie_response(db: AsyncSession, movie_id: int) -> MovieResponse:
             status_code=status.HTTP_404_NOT_FOUND, detail=MOVIE_NOT_FOUND
         )
     return MovieResponse.model_validate(movie)
+
+
+@router.get(
+    "",
+    summary="Browse the movie catalog",
+    description=(
+        f"{PAGE_SIZE} movies per page; `total` counts the movies on all "
+        "pages. A page after the last one is empty. Filters can be combined; "
+        "the year bounds and `imdb_min` are included. Sort by `year`, "
+        "`price`, `imdb` or `votes` (popularity); `-` in front means "
+        "descending. Newest first by default. No login needed."
+    ),
+)
+async def list_movies(
+    query: Annotated[MovieListQuery, Query()], db: DbSession
+) -> MoviePage:
+    movies, total = await crud.list_movies(db, query)
+    return MoviePage.model_validate(
+        {"items": movies, "total": total, "page": query.page}, from_attributes=True
+    )
 
 
 @router.post(

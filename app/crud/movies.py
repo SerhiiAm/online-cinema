@@ -1,4 +1,4 @@
-from sqlalchemy import Table, delete, insert, select, update
+from sqlalchemy import ColumnElement, Table, delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -12,7 +12,7 @@ from app.models.movies import (
     movie_genres,
     movie_stars,
 )
-from app.schemas.movies import MovieCreate, MovieUpdate
+from app.schemas.movies import PAGE_SIZE, MovieCreate, MovieListQuery, MovieUpdate
 
 # Link table, its column for the linked item, the request field with ids.
 LINKS = (
@@ -36,6 +36,57 @@ async def get_movie(db: AsyncSession, movie_id: int) -> Movie | None:
     return await db.scalar(
         select(Movie).where(Movie.id == movie_id).options(*MOVIE_DETAILS)
     )
+
+
+# What a catalog card shows (see MovieListItem).
+CATALOG_DETAILS = (joinedload(Movie.certification), selectinload(Movie.genres))
+SORT_COLUMNS = {
+    "year": Movie.year,
+    "price": Movie.price,
+    "imdb": Movie.imdb,
+    "votes": Movie.votes,
+}
+
+
+def _catalog_filters(query: MovieListQuery) -> list[ColumnElement[bool]]:
+    conditions = []
+    if query.year_from is not None:
+        conditions.append(Movie.year >= query.year_from)
+    if query.year_to is not None:
+        conditions.append(Movie.year <= query.year_to)
+    if query.imdb_min is not None:
+        conditions.append(Movie.imdb >= query.imdb_min)
+    # any() = EXISTS: a JOIN would repeat a movie once per matching link.
+    if query.genre_id is not None:
+        conditions.append(Movie.genres.any(Genre.id == query.genre_id))
+    if query.star_id is not None:
+        conditions.append(Movie.stars.any(Star.id == query.star_id))
+    return conditions
+
+
+async def list_movies(
+    db: AsyncSession, query: MovieListQuery
+) -> tuple[list[Movie], int]:
+    """One page of the catalog and the number of movies on all pages.
+
+    Both queries use the same filters, so `total` always matches what the
+    pages show. Equal values (three movies of 1994) are ordered by id:
+    otherwise the DB may return them in a different order each time and a
+    movie could show up on two pages or on none.
+    """
+    conditions = _catalog_filters(query)
+    total = await db.scalar(select(func.count()).select_from(Movie).where(*conditions))
+    column = SORT_COLUMNS[query.sort.removeprefix("-")]
+    order = column.desc() if query.sort.startswith("-") else column.asc()
+    movies = await db.scalars(
+        select(Movie)
+        .where(*conditions)
+        .order_by(order, Movie.id)
+        .limit(PAGE_SIZE)
+        .offset((query.page - 1) * PAGE_SIZE)
+        .options(*CATALOG_DETAILS)
+    )
+    return list(movies), total
 
 
 async def _add_links(

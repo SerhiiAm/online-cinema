@@ -1,6 +1,6 @@
 from datetime import date
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
@@ -152,3 +152,48 @@ class MovieResponse(BaseModel):
     genres: list[NamedItem]
     stars: list[NamedItem]
     directors: list[NamedItem]
+
+
+# --- Catalog ---
+
+PAGE_SIZE = 10
+# A fixed list, so a random column name can't reach ORDER BY.
+# "-" means descending; popularity = number of IMDb votes.
+MovieSort = Literal[
+    "year", "-year", "price", "-price", "imdb", "-imdb", "votes", "-votes"
+]
+# A filter, not a stored value: "from 1800" is a fair question (all
+# movies), so only numbers the DB driver can't pass are rejected.
+YearFilter = Annotated[int, Field(ge=0, le=MAX_DB_ID)]
+
+
+class MovieListQuery(BaseModel):
+    page: DbId = 1
+    year_from: YearFilter | None = None
+    year_to: YearFilter | None = None
+    imdb_min: Imdb | None = None
+    genre_id: DbId | None = None
+    star_id: DbId | None = None
+    sort: MovieSort = "-year"
+
+
+class MovieListItem(BaseModel):
+    """A short card for the catalog; the rest is on the movie's page."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    year: int
+    time: int
+    imdb: float
+    votes: int
+    price: Decimal
+    certification: NamedItem
+    genres: list[NamedItem]
+
+
+class MoviePage(BaseModel):
+    items: list[MovieListItem]
+    total: int
+    page: int
