@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 from app.core.dependencies import MAX_DB_ID
+from app.schemas.pagination import PageNumber
 
 # Spaces around the name are cut off, so " Drama" can't become a second
 # "Drama"; max_length matches String(255) in the DB (a longer name would
@@ -156,7 +157,6 @@ class MovieResponse(BaseModel):
 
 # --- Catalog ---
 
-PAGE_SIZE = 10
 # A fixed list, so a random column name can't reach ORDER BY.
 # "-" means descending; popularity = number of IMDb votes.
 MovieSort = Literal[
@@ -168,7 +168,7 @@ YearFilter = Annotated[int, Field(ge=0, le=MAX_DB_ID)]
 
 
 class MovieListQuery(BaseModel):
-    page: DbId = 1
+    page: PageNumber = 1
     year_from: YearFilter | None = None
     year_to: YearFilter | None = None
     imdb_min: Imdb | None = None
@@ -191,9 +191,3 @@ class MovieListItem(BaseModel):
     price: Decimal
     certification: NamedItem
     genres: list[NamedItem]
-
-
-class MoviePage(BaseModel):
-    items: list[MovieListItem]
-    total: int
-    page: int

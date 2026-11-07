@@ -7,7 +7,7 @@ here applies to all four. Reading is public, changes need a moderator
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,7 @@ from app.models.movies import (
     movie_stars,
 )
 from app.schemas.movies import ReferenceRequest, ReferenceResponse
+from app.schemas.pagination import PAGE_SIZE, Page, PageNumber
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
@@ -38,6 +39,7 @@ def build_reference_router(
     movie_column: crud.MovieColumn,
     prefix: str,
     title: str,
+    paginated: bool = False,
 ) -> APIRouter:
     router = APIRouter(prefix=prefix, tags=[f"{title}s"])
     plural = f"{title.lower()}s"
@@ -58,17 +60,34 @@ def build_reference_router(
         "and spaces around it are removed."
     )
 
-    @router.get(
-        "",
-        summary=f"List {plural}",
-        description=(
-            f"Returns all {plural} sorted by name, each with the number of "
-            "movies it is used in. No login needed."
-        ),
+    list_description = (
+        f"{plural.capitalize()} sorted by name, each with the number of "
+        "movies it is used in. No login needed."
     )
-    async def list_items(db: DbSession) -> list[ReferenceResponse]:
-        rows = await crud.list_references(db, model, movie_column)
-        return [ReferenceResponse.model_validate(row) for row in rows]
+    if paginated:
+
+        @router.get(
+            "",
+            summary=f"List {plural} page by page",
+            description=f"{list_description} {PAGE_SIZE} per page; `total` "
+            "counts all of them. A page after the last one is empty.",
+        )
+        async def list_items_page(
+            db: DbSession, page: Annotated[PageNumber, Query()] = 1
+        ) -> Page[ReferenceResponse]:
+            rows, total = await crud.list_references_page(
+                db, model, movie_column, page
+            )
+            return Page[ReferenceResponse].model_validate(
+                {"items": rows, "total": total, "page": page}, from_attributes=True
+            )
+
+    else:
+
+        @router.get("", summary=f"List {plural}", description=list_description)
+        async def list_items(db: DbSession) -> list[ReferenceResponse]:
+            rows = await crud.list_references(db, model, movie_column)
+            return [ReferenceResponse.model_validate(row) for row in rows]
 
     @router.post(
         "",
@@ -159,9 +178,13 @@ def build_reference_router(
 genres_router = build_reference_router(
     Genre, movie_genres.c.genre_id, "/genres", "Genre"
 )
-stars_router = build_reference_router(Star, movie_stars.c.star_id, "/stars", "Star")
+# A catalog has thousands of stars and directors but a few dozen genres
+# and certifications, so only the first two come page by page.
+stars_router = build_reference_router(
+    Star, movie_stars.c.star_id, "/stars", "Star", paginated=True
+)
 directors_router = build_reference_router(
-    Director, movie_directors.c.director_id, "/directors", "Director"
+    Director, movie_directors.c.director_id, "/directors", "Director", paginated=True
 )
 certifications_router = build_reference_router(
     Certification, Movie.certification_id, "/certifications", "Certification"

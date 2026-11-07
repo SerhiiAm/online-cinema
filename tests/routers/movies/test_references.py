@@ -10,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import MAX_DB_ID, PERMISSION_DENIED
 from app.routers.references import IN_USE, NAME_TAKEN, NOT_FOUND
+from app.schemas.pagination import PAGE_SIZE
 from tests.routers.movies.helpers import (
+    PAGINATED_CASES,
     ReferenceCase,
     add_item,
     add_movie,
@@ -34,11 +36,60 @@ async def test_list_is_public_sorted_and_counts_movies(
     response = await client.get(ref.path)
 
     assert response.status_code == 200
-    assert response.json() == [
+    items = [
         {"id": used_once.id, "name": "Alpha", "movie_count": 1},
         {"id": used_twice.id, "name": "Beta", "movie_count": 2},
         {"id": unused.id, "name": "Gamma", "movie_count": 0},
     ]
+    if ref.paginated:
+        assert response.json() == {"items": items, "total": 3, "page": 1}
+    else:
+        assert response.json() == items
+
+
+@pytest.mark.parametrize("ref", PAGINATED_CASES, ids=lambda case: case.path.strip("/"))
+async def test_pages(
+    client: AsyncClient, db_session: AsyncSession, ref: ReferenceCase
+) -> None:
+    for number in range(PAGE_SIZE + 2, 0, -1):  # added in reverse name order
+        await add_item(db_session, ref.model, f"Name {number:02}")
+    by_name = [f"Name {number:02}" for number in range(1, PAGE_SIZE + 3)]
+
+    pages = [
+        (await client.get(ref.path, params={"page": number})).json()
+        for number in (1, 2, 3)
+    ]
+
+    assert [[item["name"] for item in page["items"]] for page in pages] == [
+        by_name[:PAGE_SIZE],
+        by_name[PAGE_SIZE:],
+        [],
+    ]
+    assert [page["total"] for page in pages] == [PAGE_SIZE + 2] * 3
+    assert [page["page"] for page in pages] == [1, 2, 3]
+
+
+@pytest.mark.parametrize("ref", PAGINATED_CASES, ids=lambda case: case.path.strip("/"))
+async def test_last_possible_page_is_empty(
+    client: AsyncClient, db_session: AsyncSession, ref: ReferenceCase
+) -> None:
+    await add_item(db_session, ref.model, "Alpha")
+
+    # The offset is far beyond a PostgreSQL integer.
+    response = await client.get(ref.path, params={"page": MAX_DB_ID})
+
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "total": 1, "page": MAX_DB_ID}
+
+
+@pytest.mark.parametrize("ref", PAGINATED_CASES, ids=lambda case: case.path.strip("/"))
+@pytest.mark.parametrize("page", [0, MAX_DB_ID + 1])
+async def test_invalid_page_returns_422(
+    client: AsyncClient, ref: ReferenceCase, page: int
+) -> None:
+    response = await client.get(ref.path, params={"page": page})
+
+    assert response.status_code == 422
 
 
 # --- Create ---

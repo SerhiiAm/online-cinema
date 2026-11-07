@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import MAX_DB_ID
 from app.crud.movies import create_movie
 from app.models.movies import Movie
-from app.schemas.movies import PAGE_SIZE, MovieCreate
+from app.schemas.movies import MovieCreate
+from app.schemas.pagination import PAGE_SIZE
 from tests.routers.movies.helpers import movie_body
 
 ITEM_FIELDS = (

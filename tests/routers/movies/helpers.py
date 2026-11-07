@@ -26,14 +26,16 @@ class ReferenceCase:
     path: str
     title: str
     model: type[ReferenceItem]
+    paginated: bool = False
 
 
 REFERENCE_CASES = [
     ReferenceCase("/genres", "Genre", Genre),
-    ReferenceCase("/stars", "Star", Star),
-    ReferenceCase("/directors", "Director", Director),
+    ReferenceCase("/stars", "Star", Star, paginated=True),
+    ReferenceCase("/directors", "Director", Director, paginated=True),
     ReferenceCase("/certifications", "Certification", Certification),
 ]
+PAGINATED_CASES = [case for case in REFERENCE_CASES if case.paginated]
 
 # Which Movie attribute holds a list of items of this model.
 _MOVIE_LISTS = {Genre: "genres", Star: "stars", Director: "directors"}

@@ -12,7 +12,8 @@ from app.models.movies import (
     movie_genres,
     movie_stars,
 )
-from app.schemas.movies import PAGE_SIZE, MovieCreate, MovieListQuery, MovieUpdate
+from app.crud.pagination import page_of
+from app.schemas.movies import MovieCreate, MovieListQuery, MovieUpdate
 
 # Link table, its column for the linked item, the request field with ids.
 LINKS = (
@@ -79,12 +80,9 @@ async def list_movies(
     column = SORT_COLUMNS[query.sort.removeprefix("-")]
     order = column.desc() if query.sort.startswith("-") else column.asc()
     movies = await db.scalars(
-        select(Movie)
-        .where(*conditions)
-        .order_by(order, Movie.id)
-        .limit(PAGE_SIZE)
-        .offset((query.page - 1) * PAGE_SIZE)
-        .options(*CATALOG_DETAILS)
+        page_of(
+            select(Movie).where(*conditions).order_by(order, Movie.id), query.page
+        ).options(*CATALOG_DETAILS)
     )
     return list(movies), total
 

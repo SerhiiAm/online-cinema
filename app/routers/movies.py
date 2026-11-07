@@ -8,13 +8,13 @@ from app.core.database import get_db
 from app.core.dependencies import ModeratorUser, PathId
 from app.crud import movies as crud
 from app.schemas.movies import (
-    PAGE_SIZE,
     MovieCreate,
+    MovieListItem,
     MovieListQuery,
-    MoviePage,
     MovieResponse,
     MovieUpdate,
 )
+from app.schemas.pagination import PAGE_SIZE, Page
 
 router = APIRouter(prefix="/movies", tags=["Movies"])
 
@@ -98,9 +98,9 @@ async def _movie_response(db: AsyncSession, movie_id: int) -> MovieResponse:
 )
 async def list_movies(
     query: Annotated[MovieListQuery, Query()], db: DbSession
-) -> MoviePage:
+) -> Page[MovieListItem]:
     movies, total = await crud.list_movies(db, query)
-    return MoviePage.model_validate(
+    return Page[MovieListItem].model_validate(
         {"items": movies, "total": total, "page": query.page}, from_attributes=True
     )
 

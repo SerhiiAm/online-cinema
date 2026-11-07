@@ -10,6 +10,7 @@ from sqlalchemy import Column, Row, Select, delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
+from app.crud.pagination import page_of
 from app.models.movies import Certification, Director, Genre, Star
 
 ReferenceModel = type[Genre] | type[Star] | type[Director] | type[Certification]
@@ -28,13 +29,28 @@ def _columns_with_movie_count(
     return model.id, model.name, movie_count.label("movie_count")
 
 
+# Names are unique, so the order is stable without an id tiebreak.
+def _sorted_by_name(model: ReferenceModel, movie_column: MovieColumn) -> Select:
+    return select(*_columns_with_movie_count(model, movie_column)).order_by(
+        model.name
+    )
+
+
 async def list_references(
     db: AsyncSession, model: ReferenceModel, movie_column: MovieColumn
 ) -> list[Row]:
-    result = await db.execute(
-        select(*_columns_with_movie_count(model, movie_column)).order_by(model.name)
-    )
+    result = await db.execute(_sorted_by_name(model, movie_column))
     return list(result.all())
+
+
+async def list_references_page(
+    db: AsyncSession, model: ReferenceModel, movie_column: MovieColumn, page: int
+) -> tuple[list[Row], int]:
+    """One page and the number of items on all pages. Movies are counted
+    only for the items of the page."""
+    total = await db.scalar(select(func.count()).select_from(model))
+    result = await db.execute(page_of(_sorted_by_name(model, movie_column), page))
+    return list(result.all()), total
 
 
 async def count_movies(
