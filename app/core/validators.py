@@ -1,6 +1,16 @@
 import re
 
 MIN_PASSWORD_LENGTH = 8
+NUL_NOT_ALLOWED = "Text can't contain the NUL character (\\u0000)."
+
+
+def reject_nul(text: str) -> str:
+    # Valid in JSON and Python, but PostgreSQL can't store or compare text
+    # with it: the query fails -> 500. Hashed values (passwords, tokens)
+    # never reach the DB as text, so only stored/searched text needs this.
+    if "\x00" in text:
+        raise ValueError(NUL_NOT_ALLOWED)
+    return text
 
 
 def validate_password_strength(password: str) -> str:

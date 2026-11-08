@@ -193,7 +193,7 @@ docker compose exec app celery -A app.core.celery_app call app.tasks.accounts.de
 | Group | Permissions |
 |---|---|
 | `user` | default group of every new account |
-| `moderator` | everything a user can, plus content management (coming with the movie features) |
+| `moderator` | everything a user can, plus managing movies, genres, stars, directors and certifications |
 | `admin` | everything a moderator can, plus changing groups and activating accounts |
 
 Each group inherits the permissions of the groups below it.
@@ -210,6 +210,77 @@ activation email is not needed. Via the API an admin can only move users
 between `user` and `moderator`; admin accounts, including their own, can't be
 changed there. This way no admin can demote another one, and the system can
 never end up without an admin because of two admins demoting each other.
+
+### Movies
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| GET | `/movies` | public | Browse the catalog page by page, with search, filters and sorting |
+| POST | `/movies` | moderator | Create a movie |
+| GET | `/movies/{movie_id}` | public | Get a movie with its certification, genres, stars and directors |
+| PATCH | `/movies/{movie_id}` | moderator | Change only the sent fields of a movie |
+| DELETE | `/movies/{movie_id}` | moderator | Delete a movie (its genres, stars and directors stay) |
+
+"moderator" here means a moderator or an admin.
+
+**Catalog.** `GET /movies` returns 10 movies per page as
+`{"items": [...], "total": 42, "page": 1}`, where `total` counts the movies on
+all pages. A page after the last one is empty, not an error. The list shows a
+short card of each movie; the full data is at `GET /movies/{movie_id}`.
+
+| Query parameter | Meaning |
+|---|---|
+| `page` | Page number, starting from 1 |
+| `search` | Text in the title, description, a star's or a director's name |
+| `year_from`, `year_to` | Release years, both included |
+| `imdb_min` | Minimum IMDb rating, included |
+| `genre_id`, `star_id` | Only movies with this genre / star |
+| `sort` | `year`, `price`, `imdb` or `votes` (popularity); `-` in front means descending. Default `-year` (newest first) |
+
+All parameters can be combined. Search ignores case and looks for the text as a
+whole: `dark knight` finds "The Dark Knight", `knight dark` does not. An empty
+search shows all movies. An unknown `genre_id` or `star_id` gives an empty
+page, not a 404.
+
+**Creating and updating.** The certification, genres, stars and directors are
+passed by id (`certification_id`, `genre_ids`, `star_ids`, `director_ids`), so
+create them first in their own sections. Rules for a movie:
+
+- at least one genre and one director are required, stars are optional;
+- at most 50 ids in each list, repeated ids are counted once;
+- an unknown id gives 400 listing the missing ids;
+- the year is from 1888 to the current year + 5;
+- the price is above 0 with at most 2 decimal places;
+- the same name, year and duration can't be used twice (409).
+
+`PATCH` changes only the sent fields, with the same rules. A sent list replaces
+the old one: `"star_ids": []` removes all stars. Only `meta_score` and `gross`
+can be cleared with `null`. Note that Swagger's example body for `PATCH`
+contains every field, so sending it unchanged overwrites the whole movie:
+delete the fields you don't want to change.
+
+### Genres, stars, directors and certifications
+
+All four have the same endpoints (`{item}` is `genres`, `stars`, `directors`
+or `certifications`):
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| GET | `/{item}` | public | List sorted by name, each with the number of its movies |
+| POST | `/{item}` | moderator | Create one with the given name |
+| PATCH | `/{item}/{item_id}` | moderator | Rename it; movies show the new name at once |
+| DELETE | `/{item}/{item_id}` | moderator | Delete it if no movie uses it |
+
+- `/genres` and `/certifications` return a plain list: there are only a few
+  dozen of them.
+- `/stars` and `/directors` return pages of 10 (`{"items", "total", "page"}`)
+  and accept `search` by a part of the name, because a catalog has thousands
+  of them.
+- Names are unique ignoring case (`Drama` and `drama` are the same), spaces
+  around a name are removed.
+- Deleting one that movies still use gives 409 with the number of those
+  movies: change the movies first. This way a mistaken delete can't silently
+  strip a genre from hundreds of movies.
 
 ### Design decisions
 
@@ -252,7 +323,7 @@ tests/        pytest tests (mirrors the app/ structure)
 1. User registration and account activation — done
 2. JWT authentication and roles — done
 3. Password change and reset — done
-4. Movies: catalog and moderator CRUD
+4. Movies: catalog and moderator CRUD — done
 5. Shopping cart
 6. Orders
 7. Payments (Stripe)

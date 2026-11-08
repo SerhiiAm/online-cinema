@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.dependencies import AdminUser, CurrentUser
+from app.core.dependencies import AdminUser, CurrentUser, PathId
 from app.core.security import (
     DUMMY_PASSWORD_HASH,
     TokenType,
@@ -459,7 +459,7 @@ async def confirm_password_reset(
     },
 )
 async def change_user_group(
-    user_id: int, data: UserGroupUpdateRequest, admin: AdminUser, db: DbSession
+    user_id: PathId, data: UserGroupUpdateRequest, admin: AdminUser, db: DbSession
 ) -> UserResponse:
     group = UserGroupEnum(data.group)
     if not await crud.change_user_group(db, user_id, group):
@@ -494,7 +494,7 @@ async def change_user_group(
     },
 )
 async def activate_user_by_admin(
-    user_id: int, admin: AdminUser, db: DbSession
+    user_id: PathId, admin: AdminUser, db: DbSession
 ) -> UserResponse:
     user = await crud.get_user_by_id(db, user_id)
     if user is None:
