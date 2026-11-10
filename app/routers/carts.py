@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import CurrentUser
+from app.core.dependencies import CurrentUser, PathId
 from app.crud import carts as crud
 from app.routers.movies import FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION
 from app.schemas.carts import CartItemAdd, CartItemResponse, CartResponse
@@ -17,6 +17,7 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 ALREADY_IN_CART = "This movie is already in your cart."
 MOVIE_NOT_FOUND = "Movie not found."
+NOT_IN_CART = "This movie is not in your cart."
 
 AUTH_ERRORS = {
     status.HTTP_401_UNAUTHORIZED: {
@@ -82,3 +83,32 @@ async def add_to_cart(
             )
         raise
     return await _cart_response(db, user.id)
+
+
+@router.delete(
+    "/items/{movie_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a movie from your cart",
+    description="Removes one movie by its id; the other movies stay.",
+    responses={
+        **AUTH_ERRORS,
+        status.HTTP_404_NOT_FOUND: {"description": NOT_IN_CART},
+    },
+)
+async def remove_from_cart(movie_id: PathId, user: CurrentUser, db: DbSession) -> None:
+    if not await crud.remove_from_cart(db, user.id, movie_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_IN_CART)
+
+
+@router.delete(
+    "",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Clear your cart",
+    description=(
+        "Removes all movies from your cart. Clearing an empty cart is not "
+        "an error."
+    ),
+    responses=AUTH_ERRORS,
+)
+async def clear_cart(user: CurrentUser, db: DbSession) -> None:
+    await crud.clear_cart(db, user.id)

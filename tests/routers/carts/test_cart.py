@@ -17,7 +17,12 @@ EMPTY_CART = {"items": [], "total": "0"}
 
 @pytest.mark.parametrize(
     "method, path",
-    [("GET", "/cart"), ("POST", "/cart/items")],
+    [
+        ("GET", "/cart"),
+        ("POST", "/cart/items"),
+        ("DELETE", "/cart/items/1"),
+        ("DELETE", "/cart"),
+    ],
 )
 async def test_cart_needs_login(client: AsyncClient, method: str, path: str) -> None:
     response = await client.request(method, path, json={"movie_id": 1})

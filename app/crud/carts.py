@@ -1,10 +1,15 @@
-from sqlalchemy import insert, select
+from sqlalchemy import ScalarSelect, delete, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.models.carts import Cart, CartItem
 from app.models.movies import Movie
+
+
+def _cart_id_of(user_id: int) -> ScalarSelect[int]:
+    """The user's cart id as a subquery (NULL if no cart, then nothing matches)."""
+    return select(Cart.id).where(Cart.user_id == user_id).scalar_subquery()
 
 
 async def _get_or_create_cart_id(db: AsyncSession, user_id: int) -> int:
@@ -28,6 +33,27 @@ async def add_to_cart(db: AsyncSession, user_id: int, movie_id: int) -> None:
     # refused here.
     cart_id = await _get_or_create_cart_id(db, user_id)
     await db.execute(insert(CartItem).values(cart_id=cart_id, movie_id=movie_id))
+    await db.commit()
+
+
+async def remove_from_cart(db: AsyncSession, user_id: int, movie_id: int) -> bool:
+    """Returns False if the movie is not in the user's cart.
+
+    One DELETE: the check and the removal can't be split by a parallel
+    request, and the user filter keeps other carts out of reach.
+    """
+    removed_id = await db.scalar(
+        delete(CartItem)
+        .where(CartItem.cart_id == _cart_id_of(user_id), CartItem.movie_id == movie_id)
+        .returning(CartItem.id)
+    )
+    await db.commit()
+    return removed_id is not None
+
+
+async def clear_cart(db: AsyncSession, user_id: int) -> None:
+    """Removes all movies; the (empty) cart itself stays."""
+    await db.execute(delete(CartItem).where(CartItem.cart_id == _cart_id_of(user_id)))
     await db.commit()
 
 
