@@ -60,7 +60,8 @@ async def db_engine(test_database: None) -> AsyncGenerator[AsyncEngine, None]:
             text(
                 "TRUNCATE users, activation_tokens, refresh_tokens, "
                 "password_reset_tokens, movies, movie_genres, movie_stars, "
-                "movie_directors, genres, stars, directors, certifications "
+                "movie_directors, genres, stars, directors, certifications, "
+                "carts, cart_items "
                 "RESTART IDENTITY"
             )
         )

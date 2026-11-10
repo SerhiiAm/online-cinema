@@ -4,6 +4,7 @@ from app.models.accounts import (  # noqa: F401
     User,
     UserGroup,
 )
+from app.models.carts import Cart, CartItem  # noqa: F401
 from app.models.movies import (  # noqa: F401
     Certification,
     Director,
