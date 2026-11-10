@@ -30,6 +30,10 @@ async def clear_cart(client: AsyncClient, token: str) -> Response:
     return await client.delete("/cart", headers=auth(token))
 
 
+async def get_user_cart(client: AsyncClient, token: str, user_id: int) -> Response:
+    return await client.get(f"/cart/users/{user_id}", headers=auth(token))
+
+
 def cart_names(cart: dict) -> list[str]:
     """Movie names in a cart response, in the order shown."""
     return [item["movie"]["name"] for item in cart["items"]]

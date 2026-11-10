@@ -22,6 +22,7 @@ EMPTY_CART = {"items": [], "total": "0"}
         ("POST", "/cart/items"),
         ("DELETE", "/cart/items/1"),
         ("DELETE", "/cart"),
+        ("GET", "/cart/users/1"),
     ],
 )
 async def test_cart_needs_login(client: AsyncClient, method: str, path: str) -> None:

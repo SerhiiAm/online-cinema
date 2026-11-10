@@ -2,7 +2,14 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tests.routers.accounts.helpers import activate, get_token, login, register
+from app.models.accounts import UserGroupEnum
+from tests.routers.accounts.helpers import (
+    activate,
+    get_token,
+    login,
+    register,
+    set_group,
+)
 from tests.routers.carts.helpers import OTHER_EMAIL
 from tests.routers.movies.helpers import save_movie
 
@@ -17,6 +24,14 @@ async def other_token(
     await activate(client, activation_token.token, OTHER_EMAIL)
     response = await login(client, OTHER_EMAIL)
     return response.json()["access_token"]
+
+
+@pytest.fixture
+async def admin_token(db_session: AsyncSession, user_token: str) -> str:
+    # The group is read from the DB on every request, so the same token
+    # works as an admin's right after the change.
+    await set_group(db_session, UserGroupEnum.ADMIN)
+    return user_token
 
 
 @pytest.fixture

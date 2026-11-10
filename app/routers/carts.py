@@ -6,8 +6,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import CurrentUser, PathId
+from app.core.dependencies import AdminUser, CurrentUser, PathId
 from app.crud import carts as crud
+from app.crud.accounts import get_user_by_id
+from app.routers.accounts import USER_NOT_FOUND
 from app.routers.movies import FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION
 from app.schemas.carts import CartItemAdd, CartItemResponse, CartResponse
 
@@ -112,3 +114,30 @@ async def remove_from_cart(movie_id: PathId, user: CurrentUser, db: DbSession) -
 )
 async def clear_cart(user: CurrentUser, db: DbSession) -> None:
     await crud.clear_cart(db, user.id)
+
+
+@router.get(
+    "/users/{user_id}",
+    summary="View a user's cart (admin)",
+    description=(
+        "The same view as `GET /cart`, for any user, for analysis or "
+        "troubleshooting. A user without a cart has an empty one; "
+        "a user id that doesn't exist is a 404."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: AUTH_ERRORS[status.HTTP_401_UNAUTHORIZED],
+        status.HTTP_403_FORBIDDEN: {
+            "description": "You are not an admin, or the account is inactive."
+        },
+        status.HTTP_404_NOT_FOUND: {"description": USER_NOT_FOUND},
+    },
+)
+async def get_user_cart(
+    user_id: PathId, admin: AdminUser, db: DbSession
+) -> CartResponse:
+    # Checked so the admin can tell a wrong id from an empty cart.
+    if await get_user_by_id(db, user_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND
+        )
+    return await _cart_response(db, user_id)
