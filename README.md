@@ -194,7 +194,7 @@ docker compose exec app celery -A app.core.celery_app call app.tasks.accounts.de
 |---|---|
 | `user` | default group of every new account |
 | `moderator` | everything a user can, plus managing movies, genres, stars, directors and certifications |
-| `admin` | everything a moderator can, plus changing groups and activating accounts |
+| `admin` | everything a moderator can, plus changing groups, activating accounts and viewing users' carts |
 
 Each group inherits the permissions of the groups below it.
 
@@ -219,7 +219,7 @@ never end up without an admin because of two admins demoting each other.
 | POST | `/movies` | moderator | Create a movie |
 | GET | `/movies/{movie_id}` | public | Get a movie with its certification, genres, stars and directors |
 | PATCH | `/movies/{movie_id}` | moderator | Change only the sent fields of a movie |
-| DELETE | `/movies/{movie_id}` | moderator | Delete a movie (its genres, stars and directors stay) |
+| DELETE | `/movies/{movie_id}` | moderator | Delete a movie (its genres, stars and directors stay); asks for `force=true` if it is in users' carts |
 
 "moderator" here means a moderator or an admin.
 
@@ -259,6 +259,12 @@ can be cleared with `null`. Note that Swagger's example body for `PATCH`
 contains every field, so sending it unchanged overwrites the whole movie:
 delete the fields you don't want to change.
 
+**Deleting.** If the movie is in users' carts, `DELETE /movies/{movie_id}`
+deletes nothing and answers 409 with the number of those carts. To delete it
+anyway, repeat the request as `DELETE /movies/{movie_id}?force=true`: the movie
+is also removed from those carts. A movie that is in no cart is deleted right
+away, `force` is not needed.
+
 ### Genres, stars, directors and certifications
 
 All four have the same endpoints (`{item}` is `genres`, `stars`, `directors`
@@ -281,6 +287,52 @@ or `certifications`):
 - Deleting one that movies still use gives 409 with the number of those
   movies: change the movies first. This way a mistaken delete can't silently
   strip a genre from hundreds of movies.
+
+### Cart
+
+Every user has one cart. It is created by itself on the first add.
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| GET | `/cart` | any user | View your cart: the movies and the total price |
+| POST | `/cart/items` | any user | Add a movie: `{"movie_id": 1}`; returns the whole cart |
+| DELETE | `/cart/items/{movie_id}` | any user | Remove one movie from your cart |
+| DELETE | `/cart` | any user | Remove all movies from your cart |
+| GET | `/cart/users/{user_id}` | admin | View the cart of any user |
+
+"any user" means a logged-in user with an active account. Without a token
+every cart endpoint answers 401: sign up and log in first.
+
+The cart looks like this:
+
+```json
+{
+  "items": [
+    {
+      "movie": {
+        "id": 1,
+        "name": "Inception",
+        "year": 2010,
+        "price": "19.99",
+        "genres": [{"id": 3, "name": "Action"}]
+      },
+      "added_at": "2026-11-10T18:30:00Z"
+    }
+  ],
+  "total": "19.99"
+}
+```
+
+- Movies are listed in the order they were added; `total` is the sum of their
+  current prices.
+- A movie can be in a cart only once: adding it again gives 409. An unknown
+  `movie_id` gives 404.
+- Removing a movie that is not in your cart gives 404. Clearing an empty cart
+  is not an error.
+- `GET /cart/users/{user_id}` shows an empty cart for a user who has added
+  nothing yet, and 404 for a user id that doesn't exist.
+- When a moderator deletes a movie with `force=true`, it disappears from all
+  carts (see "Deleting" in Movies).
 
 ### Design decisions
 
@@ -324,6 +376,6 @@ tests/        pytest tests (mirrors the app/ structure)
 2. JWT authentication and roles — done
 3. Password change and reset — done
 4. Movies: catalog and moderator CRUD — done
-5. Shopping cart
+5. Shopping cart — done
 6. Orders
 7. Payments (Stripe)
