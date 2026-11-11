@@ -5,31 +5,15 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.accounts import UserGroupEnum
-from app.models.movies import Certification, Director, Genre, Star
-from tests.routers.accounts.helpers import (
-    activate,
-    get_token,
-    login,
-    register,
-    set_group,
-)
+from tests.routers.accounts.helpers import set_group
 from tests.routers.movies.helpers import (
     REFERENCE_CASES,
     ReferenceCase,
-    add_item,
     auth,
     movie_body,
 )
 
-
-@pytest.fixture
-async def user_token(client: AsyncClient, db_session: AsyncSession) -> str:
-    """Access token of an active user from the plain `user` group."""
-    await register(client)
-    activation_token = await get_token(db_session)
-    await activate(client, activation_token.token)
-    response = await login(client)
-    return response.json()["access_token"]
+# `user_token` and `refs` are in tests/routers/conftest.py (the cart uses them too).
 
 
 @pytest.fixture
@@ -44,19 +28,6 @@ async def moderator_token(db_session: AsyncSession, user_token: str) -> str:
 def ref(request: pytest.FixtureRequest) -> ReferenceCase:
     """Runs a test once for each of genres, stars, directors, certifications."""
     return request.param
-
-
-@pytest.fixture
-async def refs(db_session: AsyncSession) -> dict[str, int]:
-    """Ids of a certification, two genres, a star and a director."""
-    items = {
-        "certification": await add_item(db_session, Certification, "PG-13"),
-        "drama": await add_item(db_session, Genre, "Drama"),
-        "action": await add_item(db_session, Genre, "Action"),
-        "star": await add_item(db_session, Star, "Leonardo DiCaprio"),
-        "director": await add_item(db_session, Director, "Christopher Nolan"),
-    }
-    return {key: item.id for key, item in items.items()}
 
 
 @pytest.fixture

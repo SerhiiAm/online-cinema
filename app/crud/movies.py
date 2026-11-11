@@ -11,6 +11,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
+from app.models.carts import CartItem
 from app.models.movies import (
     Certification,
     Director,
@@ -160,13 +161,41 @@ async def update_movie(db: AsyncSession, movie_id: int, data: MovieUpdate) -> bo
     return True
 
 
-async def delete_movie(db: AsyncSession, movie_id: int) -> bool:
-    """Returns False if the movie does not exist. Its links go by CASCADE."""
-    deleted_id = await db.scalar(
-        delete(Movie).where(Movie.id == movie_id).returning(Movie.id)
+class MovieInCartsError(Exception):
+    """The movie is in users' carts and deleting it was not confirmed."""
+
+    def __init__(self, carts: int) -> None:
+        super().__init__(f"Carts with the movie: {carts}.")
+        self.carts = carts
+
+
+async def delete_movie(db: AsyncSession, movie_id: int, force: bool = False) -> bool:
+    """Returns False if the movie does not exist.
+
+    Without `force`, a movie that is in users' carts is not deleted:
+    MovieInCartsError tells in how many. With `force` it is deleted and
+    disappears from those carts (CASCADE), like its genre/star/director links.
+
+    The movie row is locked first. Adding a movie to a cart checks the
+    foreign key, which waits for this lock, so no cart can get the movie
+    between the count and the delete: the count is exact.
+    """
+    locked_id = await db.scalar(
+        select(Movie.id).where(Movie.id == movie_id).with_for_update()
     )
+    if locked_id is None:
+        return False
+    if not force:
+        # One movie is in a cart at most once, so items = carts.
+        carts = await db.scalar(
+            select(func.count()).where(CartItem.movie_id == movie_id)
+        )
+        if carts:
+            await db.rollback()  # release the lock, nothing was changed
+            raise MovieInCartsError(carts)
+    await db.execute(delete(Movie).where(Movie.id == movie_id))
     await db.commit()
-    return deleted_id is not None
+    return True
 
 
 async def find_missing_ids(
