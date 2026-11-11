@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.dependencies import ModeratorUser, PathId
 from app.crud import movies as crud
+from app.crud.movies import MovieInCartsError
 from app.schemas.movies import (
     MovieCreate,
     MovieListItem,
@@ -27,6 +28,10 @@ FOREIGN_KEY_VIOLATION = "23503"
 MOVIE_EXISTS = "A movie with this name, year and time already exists."
 UNKNOWN_IDS = "These ids don't exist: {ids}."
 MOVIE_NOT_FOUND = "Movie not found."
+MOVIE_IN_CARTS = (
+    "This movie is in {carts} {word}. Send force=true to delete it anyway "
+    "and remove it from users' carts."
+)
 
 AUTH_ERRORS = {
     status.HTTP_401_UNAUTHORIZED: {
@@ -171,16 +176,40 @@ async def update_movie(
     summary="Delete a movie (moderator or admin)",
     description=(
         "Removes the movie together with its links to genres, stars and "
-        "directors; the genres, stars and directors themselves stay."
+        "directors; the genres, stars and directors themselves stay. "
+        "If the movie is in users' carts, you get a 409 with the number of "
+        "carts and nothing is deleted; send `force=true` to delete it anyway "
+        "and remove it from those carts."
     ),
-    responses={**AUTH_ERRORS, **NOT_FOUND_ERROR},
+    responses={
+        **AUTH_ERRORS,
+        **NOT_FOUND_ERROR,
+        status.HTTP_409_CONFLICT: {
+            "description": "The movie is in users' carts and `force` is not set."
+        },
+    },
 )
 async def delete_movie(
-    movie_id: PathId, moderator: ModeratorUser, db: DbSession
+    movie_id: PathId,
+    moderator: ModeratorUser,
+    db: DbSession,
+    force: Annotated[
+        bool, Query(description="Delete even if the movie is in users' carts.")
+    ] = False,
 ) -> None:
-    # Orders (feature 6) will make a purchased movie undeletable: the DB
-    # will refuse (RESTRICT) and the IntegrityError will be mapped to 409 here.
-    if not await crud.delete_movie(db, movie_id):
+    # Orders (feature 6) will make a purchased movie undeletable even with
+    # force: the DB will refuse (RESTRICT) and the IntegrityError will be
+    # mapped to 409 here.
+    try:
+        deleted = await crud.delete_movie(db, movie_id, force)
+    except MovieInCartsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MOVIE_IN_CARTS.format(
+                carts=exc.carts, word="cart" if exc.carts == 1 else "carts"
+            ),
+        )
+    if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MOVIE_NOT_FOUND
         )

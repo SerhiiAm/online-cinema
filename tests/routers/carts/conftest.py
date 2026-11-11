@@ -35,6 +35,12 @@ async def admin_token(db_session: AsyncSession, user_token: str) -> str:
 
 
 @pytest.fixture
+async def moderator_token(db_session: AsyncSession, user_token: str) -> str:
+    await set_group(db_session, UserGroupEnum.MODERATOR)
+    return user_token
+
+
+@pytest.fixture
 async def movies(db_session: AsyncSession, refs: dict[str, int]) -> dict[str, int]:
     """Ids of three saved movies by name."""
     return {
