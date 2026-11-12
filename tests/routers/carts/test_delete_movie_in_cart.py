@@ -2,34 +2,19 @@
 
 import asyncio
 
-from httpx import AsyncClient, Response
+from httpx import AsyncClient
 from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.core.dependencies import MAX_DB_ID
-from app.crud.movies import get_movie
 from app.models.carts import Cart, CartItem
-from tests.routers.accounts.helpers import get_user
-from tests.routers.carts.helpers import OTHER_EMAIL, add_to_cart, cart_names, get_cart
-from tests.routers.movies.helpers import auth
+from tests.routers.accounts.helpers import OTHER_EMAIL, get_user
+from tests.routers.carts.helpers import add_to_cart, cart_names, get_cart
+from tests.routers.movies.helpers import delete_movie, movie_exists
 
 HOW_TO_FORCE = " Send force=true to delete it anyway and remove it from users' carts."
 IN_ONE_CART = "This movie is in 1 cart." + HOW_TO_FORCE
 IN_TWO_CARTS = "This movie is in 2 carts." + HOW_TO_FORCE
-
-
-async def delete_movie(
-    client: AsyncClient, token: str, movie_id: int, force: bool | None = None
-) -> Response:
-    params = {} if force is None else {"force": force}
-    return await client.delete(
-        f"/movies/{movie_id}", params=params, headers=auth(token)
-    )
-
-
-async def movie_exists(db: AsyncSession, movie_id: int) -> bool:
-    await db.rollback()  # see what other sessions committed
-    return await get_movie(db, movie_id) is not None
 
 
 async def test_movie_in_carts_is_409_without_force(

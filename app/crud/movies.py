@@ -2,6 +2,7 @@ from sqlalchemy import (
     ColumnElement,
     Table,
     delete,
+    exists,
     func,
     insert,
     or_,
@@ -22,6 +23,7 @@ from app.models.movies import (
     movie_genres,
     movie_stars,
 )
+from app.models.orders import OrderItem
 from app.crud.pagination import page_of
 from app.crud.search import contains
 from app.schemas.movies import MovieCreate, MovieListQuery, MovieUpdate
@@ -169,22 +171,35 @@ class MovieInCartsError(Exception):
         self.carts = carts
 
 
+class MovieInOrdersError(Exception):
+    """The movie is in users' orders: it can't be deleted at all."""
+
+
 async def delete_movie(db: AsyncSession, movie_id: int, force: bool = False) -> bool:
     """Returns False if the movie does not exist.
+
+    A movie that is in any order (pending, paid or canceled) is never
+    deleted, `force` or not: MovieInOrdersError. An order must not lose a
+    movie it was created with.
 
     Without `force`, a movie that is in users' carts is not deleted:
     MovieInCartsError tells in how many. With `force` it is deleted and
     disappears from those carts (CASCADE), like its genre/star/director links.
 
-    The movie row is locked first. Adding a movie to a cart checks the
-    foreign key, which waits for this lock, so no cart can get the movie
-    between the count and the delete: the count is exact.
+    The movie row is locked first. Adding a movie to a cart or to an order
+    checks the foreign key, which waits for this lock, so nothing can get
+    the movie between the checks and the delete: the checks are exact.
     """
     locked_id = await db.scalar(
         select(Movie.id).where(Movie.id == movie_id).with_for_update()
     )
     if locked_id is None:
         return False
+    # Orders first: otherwise a movie that is both in a cart and in an order
+    # would answer "send force=true", and force would then be refused too.
+    if await db.scalar(select(exists().where(OrderItem.movie_id == movie_id))):
+        await db.rollback()  # release the lock, nothing was changed
+        raise MovieInOrdersError
     if not force:
         # One movie is in a cart at most once, so items = carts.
         carts = await db.scalar(

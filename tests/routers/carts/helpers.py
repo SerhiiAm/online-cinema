@@ -7,8 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.carts import Cart, CartItem
 from tests.routers.movies.helpers import auth
 
-OTHER_EMAIL = "other@example.com"
-
 
 async def add_to_cart(client: AsyncClient, token: str, movie_id: int) -> Response:
     return await client.post(

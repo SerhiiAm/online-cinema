@@ -13,15 +13,8 @@ from tests.routers.movies.helpers import (
     movie_body,
 )
 
-# `user_token` and `refs` are in tests/routers/conftest.py (the cart uses them too).
-
-
-@pytest.fixture
-async def moderator_token(db_session: AsyncSession, user_token: str) -> str:
-    # The group is read from the DB on every request, so the same token
-    # works as a moderator's right after the change.
-    await set_group(db_session, UserGroupEnum.MODERATOR)
-    return user_token
+# `user_token`, `moderator_token` and `refs` are in tests/routers/conftest.py
+# (the cart and order tests use them too).
 
 
 @pytest.fixture(params=REFERENCE_CASES, ids=lambda case: case.path.strip("/"))
