@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -8,6 +8,7 @@ from app.core.dependencies import CurrentUser
 from app.crud import orders as crud
 from app.routers.carts import AUTH_ERRORS
 from app.schemas.orders import OrderCreatedResponse, OrderMovie, OrderResponse
+from app.schemas.pagination import PAGE_SIZE, Page, PageNumber
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 
@@ -65,4 +66,25 @@ async def create_order(user: CurrentUser, db: DbSession) -> OrderCreatedResponse
     return OrderCreatedResponse(
         **OrderResponse.model_validate(order).model_dump(),
         excluded=[OrderMovie.model_validate(movie) for movie in excluded],
+    )
+
+
+@router.get(
+    "",
+    summary="List your orders",
+    description=(
+        "Your orders, newest first, each with its date, status (`pending`, "
+        "`paid` or `canceled`), total and movies. The prices are those of "
+        "the moment the order was created, even if a movie costs something "
+        f"else now. {PAGE_SIZE} per page; `total` counts all your orders. "
+        "A page after the last one is empty."
+    ),
+    responses=AUTH_ERRORS,
+)
+async def list_orders(
+    user: CurrentUser, db: DbSession, page: Annotated[PageNumber, Query()] = 1
+) -> Page[OrderResponse]:
+    orders, total = await crud.list_user_orders(db, user.id, page)
+    return Page[OrderResponse].model_validate(
+        {"items": orders, "total": total, "page": page}, from_attributes=True
     )

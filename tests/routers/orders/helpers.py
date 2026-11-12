@@ -15,6 +15,13 @@ async def create_order(client: AsyncClient, token: str) -> Response:
     return await client.post("/orders", headers=auth(token))
 
 
+async def list_orders(
+    client: AsyncClient, token: str, page: int | None = None
+) -> Response:
+    params = {} if page is None else {"page": page}
+    return await client.get("/orders", params=params, headers=auth(token))
+
+
 def order_names(order: dict) -> list[str]:
     """Movie names in an order response, in the order shown."""
     return [item["movie"]["name"] for item in order["items"]]

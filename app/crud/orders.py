@@ -1,10 +1,11 @@
 from collections.abc import Sequence
 from decimal import Decimal
 
-from sqlalchemy import Row, insert, select
+from sqlalchemy import Row, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.crud.pagination import page_of
 from app.models.carts import Cart, CartItem
 from app.models.movies import Movie
 from app.models.orders import Order, OrderItem, OrderStatusEnum
@@ -123,10 +124,32 @@ async def _create_order(db: AsyncSession, user_id: int) -> tuple[int, Sequence[R
     return order_id, excluded
 
 
+# Loaded right away: lazy loading in async code fails -> 500.
+ORDER_DETAILS = selectinload(Order.items).joinedload(OrderItem.movie)
+
+
 async def get_order(db: AsyncSession, order_id: int) -> Order | None:
     return await db.scalar(
-        select(Order)
-        .where(Order.id == order_id)
-        # Loaded right away: lazy loading in async code fails -> 500.
-        .options(selectinload(Order.items).joinedload(OrderItem.movie))
+        select(Order).where(Order.id == order_id).options(ORDER_DETAILS)
     )
+
+
+async def list_user_orders(
+    db: AsyncSession, user_id: int, page: int
+) -> tuple[list[Order], int]:
+    """One page of the user's orders, newest first, and how many there are
+    on all pages."""
+    total = await db.scalar(
+        select(func.count()).select_from(Order).where(Order.user_id == user_id)
+    )
+    orders = await db.scalars(
+        page_of(
+            select(Order)
+            .where(Order.user_id == user_id)
+            # Ids grow in the order of creation, and are never equal.
+            .order_by(Order.id.desc())
+            .options(ORDER_DETAILS),
+            page,
+        )
+    )
+    return list(orders), total
