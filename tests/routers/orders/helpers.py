@@ -2,10 +2,26 @@
 
 from decimal import Decimal
 
+from httpx import AsyncClient, Response
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.orders import Order, OrderItem, OrderStatusEnum
+from tests.routers.accounts.helpers import EMAIL, get_user
+from tests.routers.movies.helpers import auth
+
+
+async def create_order(client: AsyncClient, token: str) -> Response:
+    return await client.post("/orders", headers=auth(token))
+
+
+def order_names(order: dict) -> list[str]:
+    """Movie names in an order response, in the order shown."""
+    return [item["movie"]["name"] for item in order["items"]]
+
+
+async def user_id_of(db: AsyncSession, email: str = EMAIL) -> int:
+    return (await get_user(db, email)).id
 
 
 async def save_order(
