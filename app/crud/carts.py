@@ -5,6 +5,11 @@ from sqlalchemy.orm import joinedload
 
 from app.models.carts import Cart, CartItem
 from app.models.movies import Movie
+from app.models.orders import Order, OrderItem, OrderStatusEnum
+
+
+class AlreadyPurchasedError(Exception):
+    """The user has already bought this movie."""
 
 
 def _cart_id_of(user_id: int) -> ScalarSelect[int]:
@@ -24,13 +29,28 @@ async def _get_or_create_cart_id(db: AsyncSession, user_id: int) -> int:
 
 
 async def add_to_cart(db: AsyncSession, user_id: int, movie_id: int) -> None:
-    """Nothing is checked beforehand: the DB decides (unique cart + movie,
+    """Raises AlreadyPurchasedError if the movie is in the user's paid order.
+
+    The rest is not checked beforehand: the DB decides (unique cart + movie,
     existing movie), so a parallel request can't slip past a check.
     A violation raises IntegrityError and nothing is saved, not even a new
     empty cart.
     """
-    # Orders (feature 6): a movie the user has already bought will be
-    # refused here.
+    # Checked first, so a movie that is both bought and in the cart gets the
+    # more useful answer. No lock: if the order is paid right after this
+    # check, "create order" still leaves the bought movie out.
+    purchased = await db.scalar(
+        select(OrderItem.id)
+        .join(Order)
+        .where(
+            Order.user_id == user_id,
+            Order.status == OrderStatusEnum.PAID,
+            OrderItem.movie_id == movie_id,
+        )
+        .limit(1)
+    )
+    if purchased is not None:
+        raise AlreadyPurchasedError
     cart_id = await _get_or_create_cart_id(db, user_id)
     await db.execute(insert(CartItem).values(cart_id=cart_id, movie_id=movie_id))
     await db.commit()

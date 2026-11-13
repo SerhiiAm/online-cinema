@@ -4,10 +4,11 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from httpx import AsyncClient, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.crud.movies import create_movie
+from app.crud.movies import create_movie, get_movie
 from app.models.movies import (
     Certification,
     Director,
@@ -105,6 +106,20 @@ async def save_movie(
 ) -> int:
     """Saves a `movie_body` movie through our own create code."""
     return await create_movie(db, MovieCreate(**movie_body(refs, name=name, **changes)))
+
+
+async def delete_movie(
+    client: AsyncClient, token: str, movie_id: int, force: bool | None = None
+) -> Response:
+    params = {} if force is None else {"force": force}
+    return await client.delete(
+        f"/movies/{movie_id}", params=params, headers=auth(token)
+    )
+
+
+async def movie_exists(db: AsyncSession, movie_id: int) -> bool:
+    await db.rollback()  # see what other sessions committed
+    return await get_movie(db, movie_id) is not None
 
 
 def names(page: dict[str, Any]) -> list[str]:

@@ -3,9 +3,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import MAX_DB_ID
 from app.models.accounts import UserGroupEnum
-from tests.routers.accounts.helpers import get_user, set_group
+from tests.routers.accounts.helpers import OTHER_EMAIL, get_user, set_group
 from tests.routers.carts.helpers import (
-    OTHER_EMAIL,
     add_to_cart,
     cart_names,
     get_user_cart,

@@ -19,6 +19,7 @@ from app.models.accounts import (
 )
 
 EMAIL = "user@example.com"
+OTHER_EMAIL = "other@example.com"  # the second user (`other_token`)
 PASSWORD = "Str0ng!pass"
 
 

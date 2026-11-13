@@ -3,7 +3,7 @@ from fastapi.exceptions import RequestValidationError
 
 from app.core.config import settings
 from app.core.exception_handlers import validation_exception_handler
-from app.routers import accounts, carts, movies, references
+from app.routers import accounts, carts, movies, orders, references
 
 app = FastAPI(
     title=settings.app_name,
@@ -18,6 +18,7 @@ app.include_router(movies.router)
 for reference_router in references.routers:
     app.include_router(reference_router)
 app.include_router(carts.router)
+app.include_router(orders.router)
 
 
 @app.get("/health", tags=["Health"])

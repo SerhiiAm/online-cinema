@@ -12,3 +12,4 @@ from app.models.movies import (  # noqa: F401
     Movie,
     Star,
 )
+from app.models.orders import Order, OrderItem  # noqa: F401
