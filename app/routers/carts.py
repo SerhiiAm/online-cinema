@@ -18,6 +18,7 @@ router = APIRouter(prefix="/cart", tags=["Cart"])
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 ALREADY_IN_CART = "This movie is already in your cart."
+ALREADY_PURCHASED = "You have already bought this movie."
 MOVIE_NOT_FOUND = "Movie not found."
 NOT_IN_CART = "This movie is not in your cart."
 
@@ -59,12 +60,16 @@ async def get_cart(user: CurrentUser, db: DbSession) -> CartResponse:
     summary="Add a movie to your cart",
     description=(
         "Adds the movie by its id and returns the whole cart. "
-        "A movie can be in the cart only once."
+        "A movie can be in the cart only once, and a movie you have already "
+        "bought can't be added."
     ),
     responses={
         **AUTH_ERRORS,
         status.HTTP_404_NOT_FOUND: {"description": MOVIE_NOT_FOUND},
-        status.HTTP_409_CONFLICT: {"description": ALREADY_IN_CART},
+        status.HTTP_409_CONFLICT: {
+            "description": "The movie is already in your cart, or you have "
+            "already bought it. The message says which."
+        },
     },
 )
 async def add_to_cart(
@@ -72,6 +77,10 @@ async def add_to_cart(
 ) -> CartResponse:
     try:
         await crud.add_to_cart(db, user.id, data.movie_id)
+    except crud.AlreadyPurchasedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=ALREADY_PURCHASED
+        )
     except IntegrityError as exc:
         # No rollback needed: no more queries here, and the session is
         # closed (rolled back) at the end of the request.
