@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from decimal import Decimal
 
-from sqlalchemy import Row, func, insert, select
+from sqlalchemy import Row, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -122,6 +122,50 @@ async def _create_order(db: AsyncSession, user_id: int) -> tuple[int, Sequence[R
     )
     await db.commit()
     return order_id, excluded
+
+
+class OrderNotFoundError(Exception):
+    """The user has no order with this id."""
+
+
+class OrderNotPendingError(Exception):
+    """The order is paid or already canceled, so it can't be canceled."""
+
+    def __init__(self, status: OrderStatusEnum) -> None:
+        super().__init__(f"The order is {status.value}.")
+        self.status = status
+
+
+async def cancel_order(db: AsyncSession, order_id: int, user_id: int) -> None:
+    """Cancels the user's own pending order.
+
+    Raises OrderNotFoundError if the user has no such order and
+    OrderNotPendingError if it is paid or already canceled.
+    """
+    # The status is checked by the UPDATE itself, not read beforehand:
+    # a payment that comes at the same moment can't slip in between
+    # "it is pending" and "make it canceled".
+    canceled_id = await db.scalar(
+        update(Order)
+        .where(
+            Order.id == order_id,
+            Order.user_id == user_id,
+            Order.status == OrderStatusEnum.PENDING,
+        )
+        .values(status=OrderStatusEnum.CANCELED)
+        .returning(Order.id)
+    )
+    if canceled_id is not None:
+        await db.commit()
+        return
+
+    # Nothing was changed; this read only picks the right answer.
+    status = await db.scalar(
+        select(Order.status).where(Order.id == order_id, Order.user_id == user_id)
+    )
+    if status is None:
+        raise OrderNotFoundError
+    raise OrderNotPendingError(status)
 
 
 # Loaded right away: lazy loading in async code fails -> 500.

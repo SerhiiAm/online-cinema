@@ -65,3 +65,13 @@ async def count_order_rows(db: AsyncSession) -> dict[str, int]:
         "orders": await db.scalar(select(func.count()).select_from(Order)),
         "items": await db.scalar(select(func.count()).select_from(OrderItem)),
     }
+
+
+async def cancel_order(client: AsyncClient, token: str, order_id: int) -> Response:
+    return await client.post(f"/orders/{order_id}/cancel", headers=auth(token))
+
+
+async def status_of(db: AsyncSession, order_id: int) -> OrderStatusEnum:
+    """The order's status as it is saved in the DB."""
+    await db.rollback()  # see what other sessions committed
+    return await db.scalar(select(Order.status).where(Order.id == order_id))

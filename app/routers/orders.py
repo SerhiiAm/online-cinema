@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import CurrentUser
+from app.core.dependencies import CurrentUser, PathId
 from app.crud import orders as crud
+from app.models.orders import OrderStatusEnum
 from app.routers.carts import AUTH_ERRORS
 from app.schemas.orders import OrderCreatedResponse, OrderMovie, OrderResponse
 from app.schemas.pagination import PAGE_SIZE, Page, PageNumber
@@ -21,6 +22,11 @@ IN_PENDING_ORDERS = (
     "Pay or cancel them first."
 )
 TOTAL_TOO_LARGE = "The order total is too large. Remove some movies from your cart."
+ORDER_NOT_FOUND = "Order not found."
+NOT_CANCELABLE = {
+    OrderStatusEnum.PAID: "A paid order can't be canceled.",
+    OrderStatusEnum.CANCELED: "The order is already canceled.",
+}
 
 
 def _refusal_text(exc: crud.OrderRefusedError) -> str:
@@ -88,3 +94,38 @@ async def list_orders(
     return Page[OrderResponse].model_validate(
         {"items": orders, "total": total, "page": page}, from_attributes=True
     )
+
+
+@router.post(
+    "/{order_id}/cancel",
+    summary="Cancel your unpaid order",
+    description=(
+        "Changes the status of your `pending` order to `canceled` and "
+        "returns the order. It stays in your list of orders, and your cart "
+        "is not changed, so you can create a new order from it. "
+        "A paid order can't be canceled."
+    ),
+    responses={
+        **AUTH_ERRORS,
+        status.HTTP_404_NOT_FOUND: {"description": "You have no order with this id."},
+        status.HTTP_409_CONFLICT: {
+            "description": "The order is paid or already canceled. "
+            "The message says which."
+        },
+    },
+)
+async def cancel_order(
+    order_id: PathId, user: CurrentUser, db: DbSession
+) -> OrderResponse:
+    try:
+        await crud.cancel_order(db, order_id, user.id)
+    except crud.OrderNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=ORDER_NOT_FOUND
+        )
+    except crud.OrderNotPendingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=NOT_CANCELABLE[exc.status]
+        )
+    order = await crud.get_order(db, order_id)
+    return OrderResponse.model_validate(order)
