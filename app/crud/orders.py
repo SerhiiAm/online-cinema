@@ -1,7 +1,8 @@
 from collections.abc import Sequence
+from datetime import UTC, datetime, time
 from decimal import Decimal
 
-from sqlalchemy import Row, func, insert, select, update
+from sqlalchemy import ColumnElement, Row, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -9,6 +10,7 @@ from app.crud.pagination import page_of
 from app.models.carts import Cart, CartItem
 from app.models.movies import Movie
 from app.models.orders import Order, OrderItem, OrderStatusEnum
+from app.schemas.orders import OrderListQuery
 
 # The largest value of the DECIMAL(10, 2) column orders.total_amount.
 MAX_TOTAL = Decimal("99999999.99")
@@ -178,18 +180,16 @@ async def get_order(db: AsyncSession, order_id: int) -> Order | None:
     )
 
 
-async def list_user_orders(
-    db: AsyncSession, user_id: int, page: int
+async def _orders_page(
+    db: AsyncSession, conditions: list[ColumnElement[bool]], page: int
 ) -> tuple[list[Order], int]:
-    """One page of the user's orders, newest first, and how many there are
-    on all pages."""
-    total = await db.scalar(
-        select(func.count()).select_from(Order).where(Order.user_id == user_id)
-    )
+    """One page of the matching orders, newest first, and how many of them
+    there are on all pages."""
+    total = await db.scalar(select(func.count()).select_from(Order).where(*conditions))
     orders = await db.scalars(
         page_of(
             select(Order)
-            .where(Order.user_id == user_id)
+            .where(*conditions)
             # Ids grow in the order of creation, and are never equal.
             .order_by(Order.id.desc())
             .options(ORDER_DETAILS),
@@ -197,3 +197,29 @@ async def list_user_orders(
         )
     )
     return list(orders), total
+
+
+async def list_user_orders(
+    db: AsyncSession, user_id: int, page: int
+) -> tuple[list[Order], int]:
+    return await _orders_page(db, [Order.user_id == user_id], page)
+
+
+async def list_all_orders(
+    db: AsyncSession, query: OrderListQuery
+) -> tuple[list[Order], int]:
+    """The orders of all users that match the filters (for admins)."""
+    conditions = []
+    if query.user_id is not None:
+        conditions.append(Order.user_id == query.user_id)
+    if query.status is not None:
+        conditions.append(Order.status == query.status)
+    # Whole days in UTC, both included: from 00:00:00 of the first day to
+    # the last microsecond of the last one (the DB stores microseconds too).
+    if query.date_from is not None:
+        start = datetime.combine(query.date_from, time.min, UTC)
+        conditions.append(Order.created_at >= start)
+    if query.date_to is not None:
+        end = datetime.combine(query.date_to, time.max, UTC)
+        conditions.append(Order.created_at <= end)
+    return await _orders_page(db, conditions, query.page)

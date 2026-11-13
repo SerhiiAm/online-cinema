@@ -75,3 +75,7 @@ async def status_of(db: AsyncSession, order_id: int) -> OrderStatusEnum:
     """The order's status as it is saved in the DB."""
     await db.rollback()  # see what other sessions committed
     return await db.scalar(select(Order.status).where(Order.id == order_id))
+
+
+async def list_all_orders(client: AsyncClient, token: str, **filters: str) -> Response:
+    return await client.get("/orders/all", params=filters, headers=auth(token))

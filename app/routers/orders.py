@@ -4,11 +4,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import CurrentUser, PathId
+from app.core.dependencies import AdminUser, CurrentUser, PathId
 from app.crud import orders as crud
 from app.models.orders import OrderStatusEnum
 from app.routers.carts import AUTH_ERRORS
-from app.schemas.orders import OrderCreatedResponse, OrderMovie, OrderResponse
+from app.schemas.orders import (
+    AdminOrderResponse,
+    OrderCreatedResponse,
+    OrderListQuery,
+    OrderMovie,
+    OrderResponse,
+)
 from app.schemas.pagination import PAGE_SIZE, Page, PageNumber
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -93,6 +99,34 @@ async def list_orders(
     orders, total = await crud.list_user_orders(db, user.id, page)
     return Page[OrderResponse].model_validate(
         {"items": orders, "total": total, "page": page}, from_attributes=True
+    )
+
+
+@router.get(
+    "/all",
+    summary="List the orders of all users (admin)",
+    description=(
+        "Every order with its `user_id`, newest first, "
+        f"{PAGE_SIZE} per page. Filters are optional and can be combined: "
+        "`user_id`, `status` (`pending`, `paid` or `canceled`) and the days "
+        "`date_from` / `date_to` (`YYYY-MM-DD`, both included). Days are "
+        "counted in UTC, like the times in the answer. A filter that matches "
+        "nothing (an unknown user, `date_from` after `date_to`) gives an "
+        "empty page."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: AUTH_ERRORS[status.HTTP_401_UNAUTHORIZED],
+        status.HTTP_403_FORBIDDEN: {
+            "description": "You are not an admin, or the account is inactive."
+        },
+    },
+)
+async def list_all_orders(
+    query: Annotated[OrderListQuery, Query()], admin: AdminUser, db: DbSession
+) -> Page[AdminOrderResponse]:
+    orders, total = await crud.list_all_orders(db, query)
+    return Page[AdminOrderResponse].model_validate(
+        {"items": orders, "total": total, "page": query.page}, from_attributes=True
     )
 
 
