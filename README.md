@@ -219,7 +219,7 @@ never end up without an admin because of two admins demoting each other.
 | POST | `/movies` | moderator | Create a movie |
 | GET | `/movies/{movie_id}` | public | Get a movie with its certification, genres, stars and directors |
 | PATCH | `/movies/{movie_id}` | moderator | Change only the sent fields of a movie |
-| DELETE | `/movies/{movie_id}` | moderator | Delete a movie (its genres, stars and directors stay); asks for `force=true` if it is in users' carts |
+| DELETE | `/movies/{movie_id}` | moderator | Delete a movie (its genres, stars and directors stay); asks for `force=true` if it is in users' carts; refused if it is in any order |
 
 "moderator" here means a moderator or an admin.
 
@@ -264,6 +264,10 @@ deletes nothing and answers 409 with the number of those carts. To delete it
 anyway, repeat the request as `DELETE /movies/{movie_id}?force=true`: the movie
 is also removed from those carts. A movie that is in no cart is deleted right
 away, `force` is not needed.
+
+A movie that is in any order (unpaid, paid or canceled) can't be deleted at
+all: the answer is 409 even with `force=true`. Orders are the purchase
+history, so they must never lose a movie.
 
 ### Genres, stars, directors and certifications
 
@@ -327,12 +331,84 @@ The cart looks like this:
   current prices.
 - A movie can be in a cart only once: adding it again gives 409. An unknown
   `movie_id` gives 404.
+- A movie you have already bought (it is in your paid order) can't be added:
+  409. A movie from your unpaid or canceled order can.
 - Removing a movie that is not in your cart gives 404. Clearing an empty cart
   is not an error.
 - `GET /cart/users/{user_id}` shows an empty cart for a user who has added
   nothing yet, and 404 for a user id that doesn't exist.
 - When a moderator deletes a movie with `force=true`, it disappears from all
   carts (see "Deleting" in Movies).
+
+### Orders
+
+An order is made from the whole cart and waits for payment.
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| POST | `/orders` | any user | Create an order from your cart (no request body) |
+| GET | `/orders` | any user | List your orders, newest first, 10 per page |
+| POST | `/orders/{order_id}/cancel` | any user | Cancel your unpaid order |
+| GET | `/orders/all` | admin | List the orders of all users, with filters |
+
+An order looks like this:
+
+```json
+{
+  "id": 1,
+  "created_at": "2026-11-12T18:30:00Z",
+  "status": "pending",
+  "total_amount": "27.49",
+  "items": [
+    {
+      "movie": {"id": 1, "name": "Inception", "year": 2010},
+      "price_at_order": "19.99"
+    },
+    {
+      "movie": {"id": 3, "name": "Tenet", "year": 2010},
+      "price_at_order": "7.50"
+    }
+  ],
+  "excluded": []
+}
+```
+
+`status` is `pending` (waits for payment), `paid` or `canceled`.
+`excluded` is returned only by `POST /orders`; `GET /orders/all` adds
+`user_id` to every order.
+
+**Creating.** `POST /orders` takes all the movies of your cart with their
+current prices. The prices are saved in the order (`price_at_order`), so a
+later price change doesn't rewrite it.
+
+- The cart is not emptied: the movies leave it when the order is paid.
+- Movies you have already bought are left out of the order and listed in
+  `excluded`.
+- The order is refused with 409, and the message says why, if the cart is
+  empty, if you have already bought every movie in it, or if any of its movies
+  is already in your unpaid order (the message names those orders: pay or
+  cancel them first).
+- An existing order is never changed. To order a different set of movies,
+  cancel the order and create a new one.
+
+**Canceling.** `POST /orders/{order_id}/cancel` changes a `pending` order to
+`canceled` and returns it. The order stays in your list, and the cart is not
+changed, so a new order can be created from it right away. A paid or already
+canceled order gives 409; an order that doesn't exist or belongs to someone
+else gives 404.
+
+**All orders (admin).** `GET /orders/all` returns pages like `GET /orders`
+and accepts these filters, which can be combined:
+
+| Query parameter | Meaning |
+|---|---|
+| `page` | Page number, starting from 1 |
+| `user_id` | Only the orders of this user |
+| `status` | `pending`, `paid` or `canceled` |
+| `date_from`, `date_to` | Days of creation as `YYYY-MM-DD`, both included, counted in UTC |
+
+A filter that matches nothing (an unknown user, `date_from` after `date_to`)
+gives an empty page, not an error.
 
 ### Design decisions
 
@@ -377,5 +453,5 @@ tests/        pytest tests (mirrors the app/ structure)
 3. Password change and reset — done
 4. Movies: catalog and moderator CRUD — done
 5. Shopping cart — done
-6. Orders
+6. Orders — done
 7. Payments (Stripe)
