@@ -13,3 +13,4 @@ from app.models.movies import (  # noqa: F401
     Star,
 )
 from app.models.orders import Order, OrderItem  # noqa: F401
+from app.models.payments import Payment, PaymentItem  # noqa: F401

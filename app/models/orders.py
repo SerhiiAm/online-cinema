@@ -2,7 +2,15 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, UniqueConstraint, func
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    ForeignKey,
+    Numeric,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -53,5 +61,10 @@ class Order(Base):
     )
     # The sum of price_at_order of the items.
     total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    # The last Stripe Checkout Session opened for this order: canceling the
+    # order expires it, so a canceled order can't be paid.
+    checkout_session_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True
+    )
 
     items: Mapped[list[OrderItem]] = relationship(order_by=OrderItem.id)
