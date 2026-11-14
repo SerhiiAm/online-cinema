@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     email_from: str = "noreply@online-cinema.local"
 
     frontend_url: str = "http://localhost:3000"
+    # Stripe returns the browser here after the payment page.
+    api_url: str = "http://localhost:8000"
+
+    # Required on purpose: an empty webhook secret would let anyone forge
+    # a "paid" event signed with the same empty key.
+    stripe_secret_key: str
+    stripe_webhook_secret: str
 
     @property
     def database_url(self) -> str:

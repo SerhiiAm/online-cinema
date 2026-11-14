@@ -3035,6 +3035,26 @@ typing-extensions = {version = ">=4.10.0", markers = "python_version < \"3.13\""
 full = ["httpx (>=0.27.0,<0.29.0)", "httpx2 (>=2.0.0)", "itsdangerous", "jinja2", "opentelemetry-api", "python-multipart (>=0.0.18)", "pyyaml"]
 
 [[package]]
+name = "stripe"
+version = "17.0.0"
+description = "Python bindings for the Stripe API"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "stripe-17.0.0-py3-none-any.whl", hash = "sha256:955bd99082dadcaf41b0d2d5075c0da8e6e848df1dccbbfcf7c856d9ac003420"},
+    {file = "stripe-17.0.0.tar.gz", hash = "sha256:5e1bdde6eac0311f6c3dea60457e3e49091789785db9c90d28d75a0398835589"},
+]
+
+[package.dependencies]
+httpx = {version = "*", optional = true, markers = "extra == \"async\""}
+requests = ">=2.20"
+typing_extensions = ">=4.7.0"
+
+[package.extras]
+async = ["httpx"]
+
+[[package]]
 name = "truststore"
 version = "0.10.5"
 description = "Verify certificates using native system trust stores"
@@ -3508,4 +3528,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "33c943a1298e0104895911474b8b12afdb68e40c00a52bc1fdda4acb1c78481a"
+content-hash = "ff527e978fc554c56ae0e33792d7dd58731e1e6baab3df6db8b377294fd793e6"
