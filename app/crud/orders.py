@@ -6,6 +6,7 @@ from sqlalchemy import ColumnElement, Row, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.payment_gateway import MAX_PAYMENT, MIN_PAYMENT
 from app.crud.pagination import page_of
 from app.models.carts import Cart, CartItem
 from app.models.movies import Movie
@@ -172,6 +173,75 @@ async def cancel_order(db: AsyncSession, order_id: int, user_id: int) -> None:
 
 # Loaded right away: lazy loading in async code fails -> 500.
 ORDER_DETAILS = selectinload(Order.items).joinedload(OrderItem.movie)
+
+
+class PricesChangedError(Exception):
+    """A movie of the order costs something else now."""
+
+
+class AmountTooSmallError(Exception):
+    pass
+
+
+class AmountTooLargeError(Exception):
+    pass
+
+
+async def lock_order_for_payment(
+    db: AsyncSession, order_id: int, user_id: int
+) -> Order:
+    """Locks the user's order until the transaction ends and checks that it
+    can be paid now. Returns it with its items and their movies.
+
+    Raises OrderNotFoundError, OrderNotPendingError, PricesChangedError,
+    AmountTooSmallError or AmountTooLargeError; the lock is released then.
+    """
+    try:
+        return await _lock_order_for_payment(db, order_id, user_id)
+    except Exception:
+        await db.rollback()  # release the lock, nothing was changed
+        raise
+
+
+async def _lock_order_for_payment(
+    db: AsyncSession, order_id: int, user_id: int
+) -> Order:
+    # The lock makes a second "pay" of the same order (a double click) wait
+    # until the first one has saved its Stripe session, so it reuses that
+    # session instead of opening a second page where the order could be
+    # paid twice.
+    order = await db.scalar(
+        select(Order)
+        .where(Order.id == order_id, Order.user_id == user_id)
+        .options(ORDER_DETAILS)
+        .with_for_update(of=Order)
+    )
+    if order is None:
+        raise OrderNotFoundError
+    if order.status != OrderStatusEnum.PENDING:
+        raise OrderNotPendingError(order.status)
+    # The user pays the prices of the order; if the catalog says otherwise,
+    # they must see the new prices in a new order first.
+    if any(item.movie.price != item.price_at_order for item in order.items):
+        raise PricesChangedError
+    if order.total_amount < MIN_PAYMENT:
+        raise AmountTooSmallError
+    if order.total_amount > MAX_PAYMENT:
+        raise AmountTooLargeError
+    return order
+
+
+async def save_checkout_session(
+    db: AsyncSession, order_id: int, session_id: str
+) -> None:
+    """Remembers the order's Stripe session and ends the transaction (so
+    the order's lock is released)."""
+    await db.execute(
+        update(Order)
+        .where(Order.id == order_id)
+        .values(checkout_session_id=session_id)
+    )
+    await db.commit()
 
 
 async def get_order(db: AsyncSession, order_id: int) -> Order | None:

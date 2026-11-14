@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.pool import NullPool
+from stripe.checkout import SessionService
 
 from app.core.config import settings
 from app.core.database import Base, get_db
@@ -86,6 +87,18 @@ def send_activation_email_mock() -> Generator[MagicMock, None, None]:
 def send_password_reset_email_mock() -> Generator[MagicMock, None, None]:
     with patch("app.routers.accounts.send_password_reset_email.delay") as mock:
         yield mock
+
+
+async def _real_stripe_call(*args: object, **kwargs: object) -> None:
+    raise AssertionError("A test tried to call the real Stripe; use fake_stripe.")
+
+
+@pytest.fixture(autouse=True)
+def no_real_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The local .env has a real test key: a test that forgot the fake must
+    # fail, not open pages in the developer's Stripe account.
+    for name in ("create_async", "retrieve_async", "expire_async"):
+        monkeypatch.setattr(SessionService, name, _real_stripe_call)
 
 
 @pytest.fixture

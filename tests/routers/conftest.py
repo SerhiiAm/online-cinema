@@ -1,8 +1,13 @@
-"""Fixtures shared by the movies, carts and orders tests."""
+"""Fixtures shared by the movies, carts, orders and payments tests."""
+
+import asyncio
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from stripe.checkout import SessionService
 
 from app.models.accounts import UserGroupEnum
 from app.models.movies import Certification, Director, Genre, Star
@@ -51,6 +56,52 @@ async def moderator_token(db_session: AsyncSession, user_token: str) -> str:
 async def admin_token(db_session: AsyncSession, user_token: str) -> str:
     await set_group(db_session, UserGroupEnum.ADMIN)
     return user_token
+
+
+class FakeStripe:
+    """Stands in for Stripe's Checkout Sessions API.
+
+    Our own code that builds the requests still runs; `created` keeps what
+    it sent, `sessions` what "Stripe" knows (a test may change a status).
+    """
+
+    def __init__(self) -> None:
+        self.created: list[dict[str, Any]] = []
+        self.sessions: dict[str, SimpleNamespace] = {}
+        # Set to a stripe.StripeError to make every call fail with it.
+        self.error: Exception | None = None
+        # A pause inside "create", to let a parallel request catch up.
+        self.delay = 0.0
+
+    async def create(self, params: dict[str, Any], options: object = None):
+        if self.error is not None:
+            raise self.error
+        await asyncio.sleep(self.delay)
+        self.created.append(params)
+        number = len(self.created)
+        session = SimpleNamespace(
+            id=f"cs_test_{number}",
+            url=f"https://checkout.stripe.test/{number}",
+            status="open",
+        )
+        self.sessions[session.id] = session
+        return session
+
+    async def retrieve(self, session_id: str, params: object = None,
+                       options: object = None):
+        if self.error is not None:
+            raise self.error
+        return self.sessions[session_id]
+
+
+@pytest.fixture
+def fake_stripe(monkeypatch: pytest.MonkeyPatch) -> FakeStripe:
+    fake = FakeStripe()
+    monkeypatch.setattr(SessionService, "create_async", staticmethod(fake.create))
+    monkeypatch.setattr(
+        SessionService, "retrieve_async", staticmethod(fake.retrieve)
+    )
+    return fake
 
 
 @pytest.fixture
