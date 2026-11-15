@@ -30,9 +30,18 @@ _client = stripe.StripeClient(
 )
 
 
+class InvalidWebhookError(Exception):
+    """The request is not a Stripe event signed with our webhook secret."""
+
+
 def to_minor_units(amount: Decimal) -> int:
     """9.99 -> 999: Stripe takes amounts in grosze, as integers."""
     return int(amount * 100)
+
+
+def from_minor_units(amount: int) -> Decimal:
+    """1998 -> 19.98: Stripe's amounts back in złoty."""
+    return Decimal(amount) / 100
 
 
 def _line_item(name: str, amount: Decimal) -> dict[str, Any]:
@@ -85,3 +94,19 @@ async def create_checkout_session(
 
 async def get_checkout_session(session_id: str) -> stripe.checkout.Session:
     return await _client.v1.checkout.sessions.retrieve_async(session_id)
+
+
+def parse_webhook_event(payload: bytes, signature: str) -> stripe.Event:
+    """Reads an event Stripe sent to our webhook.
+
+    The signature proves that Stripe sent exactly this body, and recently
+    (5 minutes), so an old request can't be replayed. Raises
+    InvalidWebhookError otherwise. No request to Stripe is made.
+    """
+    try:
+        return _client.construct_event(
+            payload, signature, settings.stripe_webhook_secret
+        )
+    # ValueError: the body is not JSON / not UTF-8.
+    except (stripe.SignatureVerificationError, ValueError) as exc:
+        raise InvalidWebhookError(str(exc)) from exc

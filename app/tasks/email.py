@@ -49,3 +49,17 @@ def send_password_reset_email(email: str, token: str) -> None:
         "If it wasn't you, just ignore this email: your password stays the same."
     )
     send_email(email, "Reset your password", body)
+
+
+@celery_app.task(autoretry_for=(OSError,), retry_backoff=True, max_retries=3)
+def send_payment_email(
+    email: str, order_id: int, amount: str, movie_names: list[str]
+) -> None:
+    """`amount` comes with its currency, e.g. "19.98 PLN"."""
+    movies = "\n".join(f"- {name}" for name in movie_names)
+    body = (
+        "Thank you for your payment!\n\n"
+        f"Order #{order_id} is paid: {amount}.\n\n"
+        f"Your movies:\n{movies}"
+    )
+    send_email(email, f"Order #{order_id} is paid", body)

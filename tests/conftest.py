@@ -89,6 +89,12 @@ def send_password_reset_email_mock() -> Generator[MagicMock, None, None]:
         yield mock
 
 
+@pytest.fixture
+def send_payment_email_mock() -> Generator[MagicMock, None, None]:
+    with patch("app.routers.payments.send_payment_email.delay") as mock:
+        yield mock
+
+
 async def _real_stripe_call(*args: object, **kwargs: object) -> None:
     raise AssertionError("A test tried to call the real Stripe; use fake_stripe.")
 
@@ -106,6 +112,7 @@ async def client(
     db_engine: AsyncEngine,
     send_activation_email_mock: MagicMock,
     send_password_reset_email_mock: MagicMock,
+    send_payment_email_mock: MagicMock,
 ) -> AsyncGenerator[AsyncClient, None]:
     session_maker = async_sessionmaker(db_engine, expire_on_commit=False)
 
