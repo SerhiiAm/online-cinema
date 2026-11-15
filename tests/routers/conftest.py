@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import stripe
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from stripe.checkout import SessionService
@@ -83,14 +84,36 @@ class FakeStripe:
             id=f"cs_test_{number}",
             url=f"https://checkout.stripe.test/{number}",
             status="open",
+            payment_status="unpaid",
+            client_reference_id=params["client_reference_id"],
+            amount_total=sum(
+                line["price_data"]["unit_amount"] for line in params["line_items"]
+            ),
+            currency=params["line_items"][0]["price_data"]["currency"],
+            payment_intent=None,
         )
         self.sessions[session.id] = session
         return session
+
+    def pay(self, session_id: str) -> None:
+        """The customer pays on the page, as Stripe would record it."""
+        session = self.sessions[session_id]
+        session.status = "complete"
+        session.payment_status = "paid"
+        session.payment_intent = session_id.replace("cs_", "pi_")
 
     async def retrieve(self, session_id: str, params: object = None,
                        options: object = None):
         if self.error is not None:
             raise self.error
+        if session_id not in self.sessions:
+            # What the real Stripe answers (checked on the sandbox).
+            raise stripe.InvalidRequestError(
+                f"No such checkout.session: {session_id}",
+                "id",
+                code="resource_missing",
+                http_status=404,
+            )
         return self.sessions[session_id]
 
 

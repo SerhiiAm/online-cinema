@@ -25,6 +25,10 @@ class PaidOrder:
     movie_names: list[str]
 
 
+async def get_order_status(db: AsyncSession, order_id: int) -> OrderStatusEnum | None:
+    return await db.scalar(select(Order.status).where(Order.id == order_id))
+
+
 async def pay_order(
     db: AsyncSession, order_id: int, amount: Decimal, external_payment_id: str | None
 ) -> PaidOrder | None:

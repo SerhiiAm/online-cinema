@@ -2,7 +2,7 @@ import logging
 from typing import Annotated
 
 import stripe
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from kombu.exceptions import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +11,15 @@ from app.core.database import get_db
 from app.core.dependencies import MAX_DB_ID
 from app.crud import payments as crud
 from app.crud.orders import OrderNotFoundError, OrderNotPendingError
-from app.schemas.payments import WebhookResponse
+from app.models.orders import OrderStatusEnum
+from app.routers.orders import GATEWAY_UNAVAILABLE
+from app.schemas.movies import DbId
+from app.schemas.payments import (
+    CheckoutSessionId,
+    PaymentCanceledResponse,
+    PaymentResultResponse,
+    WebhookResponse,
+)
 from app.tasks.email import send_payment_email
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
@@ -20,6 +28,24 @@ logger = logging.getLogger(__name__)
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 INVALID_WEBHOOK = "The request is not a valid Stripe event."
+SESSION_NOT_FOUND = "Payment session not found."
+PAYMENT_RESULT = {
+    OrderStatusEnum.PAID: (
+        "Thank you! Order #{order_id} is paid. "
+        "A confirmation email is on its way."
+    ),
+    OrderStatusEnum.PENDING: (
+        "The payment for order #{order_id} is not confirmed yet. "
+        "Check the status of the order a little later."
+    ),
+    OrderStatusEnum.CANCELED: (
+        "Order #{order_id} is canceled. If you were charged, contact support."
+    ),
+}
+PAYMENT_NOT_COMPLETED = (
+    "The payment was not completed. Order #{order_id} is still waiting for "
+    "payment: try again or use a different payment method."
+)
 # The events after which Stripe may have the money. "completed" comes when
 # the customer finishes the page; with a delayed payment method (a bank
 # debit) the money isn't there yet then, and "async_payment_succeeded"
@@ -139,3 +165,76 @@ async def stripe_webhook(
     # Any answer outside 2xx makes Stripe send the event again later;
     # a database error (500) should, everything else shouldn't.
     return WebhookResponse()
+
+
+@router.get(
+    "/success",
+    summary="Payment result (Stripe returns the browser here)",
+    description=(
+        "Stripe sends the user's browser here after a payment, with the id "
+        "of its payment session. No login is needed: the id is long and "
+        "random, and the result is asked from Stripe itself. If Stripe has "
+        "the money but the webhook hasn't come yet, the order is marked "
+        "paid right here (the webhook then changes nothing). Answers with "
+        "the order's status: `paid`, `pending` (the payment is not "
+        "confirmed yet) or `canceled`."
+    ),
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "description": "Stripe has no such session, or it is not ours."
+        },
+        status.HTTP_502_BAD_GATEWAY: {
+            "description": "Stripe didn't answer or refused; try again."
+        },
+    },
+)
+async def payment_success(
+    session_id: Annotated[CheckoutSessionId, Query()], db: DbSession
+) -> PaymentResultResponse:
+    try:
+        session = await gateway.get_checkout_session(session_id)
+    except gateway.PaymentGatewayError as exc:
+        # Stripe answers 404 for an id it doesn't know: the user's mistake,
+        # not a failure. Anything else is logged.
+        if exc.http_status == status.HTTP_404_NOT_FOUND:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=SESSION_NOT_FOUND
+            )
+        logger.exception("Stripe request failed for session %s", session_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=GATEWAY_UNAVAILABLE
+        )
+    order_id = _order_id_of(session)
+    if order_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=SESSION_NOT_FOUND
+        )
+    await fulfill_checkout(db, session)
+    order_status = await crud.get_order_status(db, order_id)
+    if order_status is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=SESSION_NOT_FOUND
+        )
+    return PaymentResultResponse(
+        order_id=order_id,
+        status=order_status,
+        message=PAYMENT_RESULT[order_status].format(order_id=order_id),
+    )
+
+
+@router.get(
+    "/cancel",
+    summary="Payment not completed (Stripe returns the browser here)",
+    description=(
+        "Stripe sends the user's browser here when they leave the payment "
+        "page without paying. Nothing changes: the order stays `pending` "
+        "and can be paid again. No login is needed and nothing about the "
+        "order is shown."
+    ),
+)
+async def payment_canceled(
+    order_id: Annotated[DbId, Query()],
+) -> PaymentCanceledResponse:
+    return PaymentCanceledResponse(
+        order_id=order_id, message=PAYMENT_NOT_COMPLETED.format(order_id=order_id)
+    )
