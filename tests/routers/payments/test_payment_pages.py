@@ -11,11 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import MAX_DB_ID
 from app.models.movies import Movie
-from app.models.orders import OrderStatusEnum
+from app.models.orders import Order, OrderStatusEnum
 from tests.routers.carts.helpers import add_to_cart, cart_names, get_cart
 from tests.routers.conftest import FakeStripe
 from tests.routers.orders.helpers import (
-    cancel_order,
     checkout,
     save_order,
     status_of,
@@ -134,13 +133,16 @@ async def test_unpaid_session_shows_pending(
 async def test_paid_but_canceled_order_says_so(
     client: AsyncClient,
     db_session: AsyncSession,
-    user_token: str,
     order: int,
     fake_stripe: FakeStripe,
 ) -> None:
-    # Possible until canceling closes the Stripe page (next step).
-    await cancel_order(client, user_token, order)
+    # Our cancel closes the page first, so only a change made by hand in the
+    # DB can lead here; the user still gets a clear answer.
     fake_stripe.pay("cs_test_1")
+    await db_session.execute(
+        update(Order).where(Order.id == order).values(status=OrderStatusEnum.CANCELED)
+    )
+    await db_session.commit()
 
     response = await success_page(client, "cs_test_1")
 

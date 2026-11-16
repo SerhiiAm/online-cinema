@@ -161,14 +161,20 @@ async def list_all_orders(
         "Changes the status of your `pending` order to `canceled` and "
         "returns the order. It stays in your list of orders, and your cart "
         "is not changed, so you can create a new order from it. "
+        "If a Stripe payment page is open for the order, it is closed "
+        "first, so a canceled order can't be paid. "
         "A paid order can't be canceled."
     ),
     responses={
         **AUTH_ERRORS,
         status.HTTP_404_NOT_FOUND: {"description": "You have no order with this id."},
         status.HTTP_409_CONFLICT: {
-            "description": "The order is paid or already canceled. "
-            "The message says which."
+            "description": "The order is paid or already canceled, or it has "
+            "just been paid on its Stripe page. The message says which."
+        },
+        status.HTTP_502_BAD_GATEWAY: {
+            "description": "Stripe didn't answer, so the payment page couldn't "
+            "be closed; the order is not canceled."
         },
     },
 )
@@ -176,7 +182,7 @@ async def cancel_order(
     order_id: PathId, user: CurrentUser, db: DbSession
 ) -> OrderResponse:
     try:
-        await crud.cancel_order(db, order_id, user.id)
+        order = await crud.lock_order_for_cancel(db, order_id, user.id)
     except crud.OrderNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=ORDER_NOT_FOUND
@@ -185,7 +191,24 @@ async def cancel_order(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=NOT_CANCELABLE[exc.status]
         )
-    order = await crud.get_order(db, order_id)
+
+    # The order stays locked until it is canceled or we give up.
+    if order.checkout_session_id is not None:
+        try:
+            outcome = await gateway.close_checkout_session(order.checkout_session_id)
+        except gateway.PaymentGatewayError:
+            logger.exception("Stripe request failed for order %s", order_id)
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=GATEWAY_UNAVAILABLE
+            )
+        if outcome == "complete":
+            # Paid on Stripe; the webhook will mark the order paid.
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=PAYMENT_IN_PROGRESS
+            )
+    await crud.mark_canceled(db, order)
     return OrderResponse.model_validate(order)
 
 

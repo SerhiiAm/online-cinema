@@ -116,14 +116,29 @@ class FakeStripe:
             )
         return self.sessions[session_id]
 
+    async def expire(self, session_id: str, params: object = None,
+                     options: object = None):
+        session = await self.retrieve(session_id)
+        if session.status != "open":
+            # What the real Stripe answers (checked on the sandbox).
+            raise stripe.InvalidRequestError(
+                'Only Checkout Sessions with a status in ["open"] can be '
+                f"expired. This Checkout Session has a status of "
+                f"`{session.status}`.",
+                None,
+                http_status=400,
+            )
+        session.status = "expired"
+        return session
+
 
 @pytest.fixture
 def fake_stripe(monkeypatch: pytest.MonkeyPatch) -> FakeStripe:
     fake = FakeStripe()
-    monkeypatch.setattr(SessionService, "create_async", staticmethod(fake.create))
-    monkeypatch.setattr(
-        SessionService, "retrieve_async", staticmethod(fake.retrieve)
-    )
+    for name in ("create", "retrieve", "expire"):
+        monkeypatch.setattr(
+            SessionService, f"{name}_async", staticmethod(getattr(fake, name))
+        )
     return fake
 
 

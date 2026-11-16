@@ -96,6 +96,26 @@ async def get_checkout_session(session_id: str) -> stripe.checkout.Session:
     return await _client.v1.checkout.sessions.retrieve_async(session_id)
 
 
+async def close_checkout_session(session_id: str) -> str:
+    """Makes the payment page impossible to pay on.
+
+    Returns how the session ended: "expired" (not paid, and now it can't
+    be) or "complete" (it was paid before we could close it).
+    """
+    try:
+        session = await _client.v1.checkout.sessions.expire_async(session_id)
+    except stripe.InvalidRequestError as exc:
+        # Stripe refuses when the session is not open any more (400, checked
+        # on the sandbox): it expired by itself or has just been paid.
+        # Ask which.
+        session = await get_checkout_session(session_id)
+        if session.status == "open":
+            # Stripe refused to close an open page: the order must not be
+            # canceled while it can still be paid.
+            raise exc
+    return session.status
+
+
 def parse_webhook_event(payload: bytes, signature: str) -> stripe.Event:
     """Reads an event Stripe sent to our webhook.
 

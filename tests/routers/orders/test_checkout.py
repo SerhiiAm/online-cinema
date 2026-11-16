@@ -386,6 +386,7 @@ async def test_stripe_error_is_502(
     expected_session = "cs_test_1" if step == "retrieve" else None
     assert await checkout_session_of(db_session, order_id) == expected_session
     # The order's lock is released: canceling it doesn't hang.
+    fake_stripe.error = None  # canceling closes the page on Stripe
     canceled = await asyncio.wait_for(
         cancel_order(client, user_token, order_id), timeout=5
     )

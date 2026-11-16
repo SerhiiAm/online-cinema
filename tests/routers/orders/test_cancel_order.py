@@ -3,26 +3,62 @@
 import asyncio
 
 import pytest
+import stripe
 from httpx import AsyncClient
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from stripe.checkout import SessionService
 
 from app.core.dependencies import MAX_DB_ID
+from app.models.movies import Movie
 from app.models.orders import Order, OrderStatusEnum
 from tests.routers.accounts.helpers import OTHER_EMAIL
 from tests.routers.carts.helpers import add_to_cart, cart_names, get_cart
+from tests.routers.conftest import FakeStripe
 from tests.routers.orders.helpers import (
     cancel_order,
+    checkout,
     create_order,
     order_names,
     save_order,
     status_of,
     user_id_of,
 )
+from tests.routers.payments.helpers import send_webhook, session_event
 
 NOT_FOUND = {"detail": "Order not found."}
 PAID = {"detail": "A paid order can't be canceled."}
 ALREADY_CANCELED = {"detail": "The order is already canceled."}
+IN_PROGRESS = {
+    "detail": "The order has already been paid; the confirmation is on its way."
+}
+UNAVAILABLE = {"detail": "The payment service is unavailable. Try again later."}
+CANCELED_CANT_BE_PAID = {
+    "detail": "A canceled order can't be paid. Create a new order."
+}
+
+
+@pytest.fixture
+async def unpaid(
+    db_session: AsyncSession, user_token: str, movies: dict[str, int]
+) -> int:
+    """A pending order of Inception that can be paid (9.99, the catalog
+    price), without a payment page yet."""
+    await db_session.execute(
+        update(Movie).where(Movie.id == movies["Inception"]).values(price="9.99")
+    )
+    await db_session.commit()
+    user_id = await user_id_of(db_session)
+    return await save_order(db_session, user_id, [movies["Inception"]])
+
+
+@pytest.fixture
+async def with_page(
+    client: AsyncClient, user_token: str, unpaid: int, fake_stripe: FakeStripe
+) -> int:
+    """The same order with an open Stripe page cs_test_1."""
+    await checkout(client, user_token, unpaid)
+    return unpaid
 
 
 async def test_pending_order_is_canceled(
@@ -202,3 +238,123 @@ async def test_order_paid_at_the_same_moment_stays_paid(
     assert response.status_code == 409
     assert response.json() == PAID
     assert await status_of(db_session, order_id) == OrderStatusEnum.PAID
+
+
+# --- An order with a Stripe payment page ---
+
+
+async def test_open_page_is_closed_before_cancel(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    user_token: str,
+    with_page: int,
+    fake_stripe: FakeStripe,
+) -> None:
+    response = await cancel_order(client, user_token, with_page)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "canceled"
+    assert await status_of(db_session, with_page) == OrderStatusEnum.CANCELED
+    # The page can't be paid on any more, and no new one is opened.
+    assert fake_stripe.sessions["cs_test_1"].status == "expired"
+    again = await checkout(client, user_token, with_page)
+    assert again.json() == CANCELED_CANT_BE_PAID
+    assert len(fake_stripe.created) == 1
+
+
+async def test_page_that_expired_by_itself_is_canceled(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    user_token: str,
+    with_page: int,
+    fake_stripe: FakeStripe,
+) -> None:
+    fake_stripe.sessions["cs_test_1"].status = "expired"  # after 60 minutes
+
+    response = await cancel_order(client, user_token, with_page)
+
+    assert response.status_code == 200
+    assert await status_of(db_session, with_page) == OrderStatusEnum.CANCELED
+
+
+async def test_order_paid_on_its_page_is_not_canceled(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    user_token: str,
+    with_page: int,
+    fake_stripe: FakeStripe,
+) -> None:
+    # The user has paid, but the webhook hasn't come yet.
+    fake_stripe.pay("cs_test_1")
+
+    response = await cancel_order(client, user_token, with_page)
+
+    assert response.status_code == 409
+    assert response.json() == IN_PROGRESS
+    assert await status_of(db_session, with_page) == OrderStatusEnum.PENDING
+    # The order is free again: the webhook that comes next marks it paid.
+    await send_webhook(client, session_event(with_page))
+    assert await status_of(db_session, with_page) == OrderStatusEnum.PAID
+
+
+async def test_stripe_error_is_502(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    user_token: str,
+    with_page: int,
+    fake_stripe: FakeStripe,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake_stripe.error = stripe.APIConnectionError("Stripe is down")
+
+    response = await cancel_order(client, user_token, with_page)
+
+    assert response.status_code == 502
+    assert response.json() == UNAVAILABLE
+    assert f"Stripe request failed for order {with_page}" in caplog.text
+    assert "Stripe is down" in caplog.text
+    # Not canceled: the page may still be paid on.
+    assert await status_of(db_session, with_page) == OrderStatusEnum.PENDING
+    assert fake_stripe.sessions["cs_test_1"].status == "open"
+
+
+async def test_page_stripe_refuses_to_close_is_502(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    user_token: str,
+    with_page: int,
+    fake_stripe: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Stripe says "not open", but the page is still open when we ask again.
+    async def refuse(session_id: str, params: object = None, options: object = None):
+        raise stripe.InvalidRequestError("Refused", None, http_status=400)
+
+    monkeypatch.setattr(SessionService, "expire_async", staticmethod(refuse))
+
+    response = await cancel_order(client, user_token, with_page)
+
+    assert response.status_code == 502
+    assert await status_of(db_session, with_page) == OrderStatusEnum.PENDING
+
+
+async def test_cancel_waits_for_a_page_being_opened(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    user_token: str,
+    unpaid: int,
+    fake_stripe: FakeStripe,
+) -> None:
+    # "Pay" is waiting for Stripe with the order locked. Cancel must wait for
+    # it and then close the new page; a cancel that didn't wait would see no
+    # page and leave it open for a canceled order.
+    fake_stripe.delay = 0.5
+    paying = asyncio.create_task(checkout(client, user_token, unpaid))
+    await asyncio.sleep(0.2)
+
+    response = await cancel_order(client, user_token, unpaid)
+
+    assert (await paying).status_code == 200
+    assert response.status_code == 200
+    assert await status_of(db_session, unpaid) == OrderStatusEnum.CANCELED
+    assert fake_stripe.sessions["cs_test_1"].status == "expired"
