@@ -31,6 +31,9 @@ jobs:
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: 5432
       JWT_SECRET_KEY: test-secret-key-for-ci-only-0123456789
+      # Stripe is mocked in tests; the values only let the settings load.
+      STRIPE_SECRET_KEY: sk_test_ci
+      STRIPE_WEBHOOK_SECRET: whsec_ci
 
     steps:
       - name: Check out code

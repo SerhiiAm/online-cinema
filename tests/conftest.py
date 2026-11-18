@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.pool import NullPool
+from stripe.checkout import SessionService
 
 from app.core.config import settings
 from app.core.database import Base, get_db
@@ -61,7 +62,8 @@ async def db_engine(test_database: None) -> AsyncGenerator[AsyncEngine, None]:
                 "TRUNCATE users, activation_tokens, refresh_tokens, "
                 "password_reset_tokens, movies, movie_genres, movie_stars, "
                 "movie_directors, genres, stars, directors, certifications, "
-                "carts, cart_items, orders, order_items "
+                "carts, cart_items, orders, order_items, payments, "
+                "payment_items "
                 "RESTART IDENTITY"
             )
         )
@@ -88,10 +90,29 @@ def send_password_reset_email_mock() -> Generator[MagicMock, None, None]:
 
 
 @pytest.fixture
+def send_payment_email_mock() -> Generator[MagicMock, None, None]:
+    with patch("app.routers.payments.send_payment_email.delay") as mock:
+        yield mock
+
+
+async def _real_stripe_call(*args: object, **kwargs: object) -> None:
+    raise AssertionError("A test tried to call the real Stripe; use fake_stripe.")
+
+
+@pytest.fixture(autouse=True)
+def no_real_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The local .env has a real test key: a test that forgot the fake must
+    # fail, not open pages in the developer's Stripe account.
+    for name in ("create_async", "retrieve_async", "expire_async"):
+        monkeypatch.setattr(SessionService, name, _real_stripe_call)
+
+
+@pytest.fixture
 async def client(
     db_engine: AsyncEngine,
     send_activation_email_mock: MagicMock,
     send_password_reset_email_mock: MagicMock,
+    send_payment_email_mock: MagicMock,
 ) -> AsyncGenerator[AsyncClient, None]:
     session_maker = async_sessionmaker(db_engine, expire_on_commit=False)
 

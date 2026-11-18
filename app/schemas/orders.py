@@ -41,6 +41,11 @@ class OrderCreatedResponse(OrderResponse):
     excluded: list[OrderMovie]
 
 
+class CheckoutResponse(BaseModel):
+    # The Stripe page where the user pays the order.
+    checkout_url: str
+
+
 # --- All orders (admin) ---
 
 

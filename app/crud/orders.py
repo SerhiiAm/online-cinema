@@ -1,12 +1,13 @@
 from collections.abc import Sequence
-from datetime import UTC, datetime, time
 from decimal import Decimal
 
 from sqlalchemy import ColumnElement, Row, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.payment_gateway import MAX_PAYMENT, MIN_PAYMENT
 from app.crud.pagination import page_of
+from app.crud.search import within_days
 from app.models.carts import Cart, CartItem
 from app.models.movies import Movie
 from app.models.orders import Order, OrderItem, OrderStatusEnum
@@ -138,40 +139,110 @@ class OrderNotPendingError(Exception):
         self.status = status
 
 
-async def cancel_order(db: AsyncSession, order_id: int, user_id: int) -> None:
-    """Cancels the user's own pending order.
-
-    Raises OrderNotFoundError if the user has no such order and
-    OrderNotPendingError if it is paid or already canceled.
-    """
-    # The status is checked by the UPDATE itself, not read beforehand:
-    # a payment that comes at the same moment can't slip in between
-    # "it is pending" and "make it canceled".
-    canceled_id = await db.scalar(
-        update(Order)
-        .where(
-            Order.id == order_id,
-            Order.user_id == user_id,
-            Order.status == OrderStatusEnum.PENDING,
-        )
-        .values(status=OrderStatusEnum.CANCELED)
-        .returning(Order.id)
-    )
-    if canceled_id is not None:
-        await db.commit()
-        return
-
-    # Nothing was changed; this read only picks the right answer.
-    status = await db.scalar(
-        select(Order.status).where(Order.id == order_id, Order.user_id == user_id)
-    )
-    if status is None:
-        raise OrderNotFoundError
-    raise OrderNotPendingError(status)
-
-
 # Loaded right away: lazy loading in async code fails -> 500.
 ORDER_DETAILS = selectinload(Order.items).joinedload(OrderItem.movie)
+
+
+async def _lock_pending_order(
+    db: AsyncSession, order_id: int, user_id: int
+) -> Order:
+    """Locks the user's order until the transaction ends; it must be pending.
+    Returns it with its items and their movies."""
+    order = await db.scalar(
+        select(Order)
+        .where(Order.id == order_id, Order.user_id == user_id)
+        .options(ORDER_DETAILS)
+        .with_for_update(of=Order)
+    )
+    if order is None:
+        raise OrderNotFoundError
+    if order.status != OrderStatusEnum.PENDING:
+        raise OrderNotPendingError(order.status)
+    return order
+
+
+async def lock_order_for_cancel(
+    db: AsyncSession, order_id: int, user_id: int
+) -> Order:
+    """Locks the user's pending order until the transaction ends.
+
+    While we close its Stripe page, a payment (it locks the order too) or
+    a new page ("checkout" locks it as well) has to wait, and they see the
+    order canceled afterwards. Raises OrderNotFoundError or
+    OrderNotPendingError; the lock is released then.
+    """
+    try:
+        return await _lock_pending_order(db, order_id, user_id)
+    except Exception:
+        await db.rollback()  # release the lock, nothing was changed
+        raise
+
+
+async def mark_canceled(db: AsyncSession, order: Order) -> None:
+    """Cancels the locked order and ends the transaction (so the lock is
+    released)."""
+    order.status = OrderStatusEnum.CANCELED
+    await db.commit()
+
+
+class PricesChangedError(Exception):
+    """A movie of the order costs something else now."""
+
+
+class AmountTooSmallError(Exception):
+    pass
+
+
+class AmountTooLargeError(Exception):
+    pass
+
+
+async def lock_order_for_payment(
+    db: AsyncSession, order_id: int, user_id: int
+) -> Order:
+    """Locks the user's order until the transaction ends and checks that it
+    can be paid now. Returns it with its items and their movies.
+
+    Raises OrderNotFoundError, OrderNotPendingError, PricesChangedError,
+    AmountTooSmallError or AmountTooLargeError; the lock is released then.
+    """
+    try:
+        return await _lock_order_for_payment(db, order_id, user_id)
+    except Exception:
+        await db.rollback()  # release the lock, nothing was changed
+        raise
+
+
+async def _lock_order_for_payment(
+    db: AsyncSession, order_id: int, user_id: int
+) -> Order:
+    # The lock makes a second "pay" of the same order (a double click) wait
+    # until the first one has saved its Stripe session, so it reuses that
+    # session instead of opening a second page where the order could be
+    # paid twice.
+    order = await _lock_pending_order(db, order_id, user_id)
+    # The user pays the prices of the order; if the catalog says otherwise,
+    # they must see the new prices in a new order first.
+    if any(item.movie.price != item.price_at_order for item in order.items):
+        raise PricesChangedError
+    if order.total_amount < MIN_PAYMENT:
+        raise AmountTooSmallError
+    if order.total_amount > MAX_PAYMENT:
+        raise AmountTooLargeError
+    return order
+
+
+async def save_checkout_session(
+    db: AsyncSession, order_id: int, session_id: str
+) -> None:
+    """Remembers the order's Stripe session and ends the transaction (so
+    the order's lock is released)."""
+    await db.execute(
+        update(Order)
+        .where(Order.id == order_id)
+        .values(checkout_session_id=session_id)
+    )
+    await db.commit()
 
 
 async def get_order(db: AsyncSession, order_id: int) -> Order | None:
@@ -214,12 +285,5 @@ async def list_all_orders(
         conditions.append(Order.user_id == query.user_id)
     if query.status is not None:
         conditions.append(Order.status == query.status)
-    # Whole days in UTC, both included: from 00:00:00 of the first day to
-    # the last microsecond of the last one (the DB stores microseconds too).
-    if query.date_from is not None:
-        start = datetime.combine(query.date_from, time.min, UTC)
-        conditions.append(Order.created_at >= start)
-    if query.date_to is not None:
-        end = datetime.combine(query.date_to, time.max, UTC)
-        conditions.append(Order.created_at <= end)
+    conditions += within_days(Order.created_at, query.date_from, query.date_to)
     return await _orders_page(db, conditions, query.page)

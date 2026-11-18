@@ -1,8 +1,10 @@
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import payment_gateway as gateway
 from app.core.database import get_db
 from app.core.dependencies import AdminUser, CurrentUser, PathId
 from app.crud import orders as crud
@@ -10,6 +12,7 @@ from app.models.orders import OrderStatusEnum
 from app.routers.carts import AUTH_ERRORS
 from app.schemas.orders import (
     AdminOrderResponse,
+    CheckoutResponse,
     OrderCreatedResponse,
     OrderListQuery,
     OrderMovie,
@@ -18,6 +21,7 @@ from app.schemas.orders import (
 from app.schemas.pagination import PAGE_SIZE, Page, PageNumber
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
+logger = logging.getLogger(__name__)
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
@@ -33,6 +37,26 @@ NOT_CANCELABLE = {
     OrderStatusEnum.PAID: "A paid order can't be canceled.",
     OrderStatusEnum.CANCELED: "The order is already canceled.",
 }
+NOT_PAYABLE = {
+    OrderStatusEnum.PAID: "The order is already paid.",
+    OrderStatusEnum.CANCELED: "A canceled order can't be paid. Create a new order.",
+}
+PRICES_CHANGED = (
+    "The prices of some movies have changed since the order was created. "
+    "Cancel this order and create a new one."
+)
+AMOUNT_TOO_SMALL = (
+    f"The minimum amount for a payment is {gateway.MIN_PAYMENT} "
+    f"{gateway.CURRENCY.upper()}."
+)
+AMOUNT_TOO_LARGE = (
+    f"The maximum amount for a payment is {gateway.MAX_PAYMENT} "
+    f"{gateway.CURRENCY.upper()}."
+)
+PAYMENT_IN_PROGRESS = (
+    "The order has already been paid; the confirmation is on its way."
+)
+GATEWAY_UNAVAILABLE = "The payment service is unavailable. Try again later."
 
 
 def _refusal_text(exc: crud.OrderRefusedError) -> str:
@@ -137,14 +161,20 @@ async def list_all_orders(
         "Changes the status of your `pending` order to `canceled` and "
         "returns the order. It stays in your list of orders, and your cart "
         "is not changed, so you can create a new order from it. "
+        "If a Stripe payment page is open for the order, it is closed "
+        "first, so a canceled order can't be paid. "
         "A paid order can't be canceled."
     ),
     responses={
         **AUTH_ERRORS,
         status.HTTP_404_NOT_FOUND: {"description": "You have no order with this id."},
         status.HTTP_409_CONFLICT: {
-            "description": "The order is paid or already canceled. "
-            "The message says which."
+            "description": "The order is paid or already canceled, or it has "
+            "just been paid on its Stripe page. The message says which."
+        },
+        status.HTTP_502_BAD_GATEWAY: {
+            "description": "Stripe didn't answer, so the payment page couldn't "
+            "be closed; the order is not canceled."
         },
     },
 )
@@ -152,7 +182,7 @@ async def cancel_order(
     order_id: PathId, user: CurrentUser, db: DbSession
 ) -> OrderResponse:
     try:
-        await crud.cancel_order(db, order_id, user.id)
+        order = await crud.lock_order_for_cancel(db, order_id, user.id)
     except crud.OrderNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=ORDER_NOT_FOUND
@@ -161,5 +191,98 @@ async def cancel_order(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=NOT_CANCELABLE[exc.status]
         )
-    order = await crud.get_order(db, order_id)
+
+    # The order stays locked until it is canceled or we give up.
+    if order.checkout_session_id is not None:
+        try:
+            outcome = await gateway.close_checkout_session(order.checkout_session_id)
+        except gateway.PaymentGatewayError:
+            logger.exception("Stripe request failed for order %s", order_id)
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=GATEWAY_UNAVAILABLE
+            )
+        if outcome == "complete":
+            # Paid on Stripe; the webhook will mark the order paid.
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=PAYMENT_IN_PROGRESS
+            )
+    await crud.mark_canceled(db, order)
     return OrderResponse.model_validate(order)
+
+
+@router.post(
+    "/{order_id}/checkout",
+    summary="Pay your order",
+    description=(
+        "Opens a Stripe payment page for your `pending` order and returns "
+        "its address: open `checkout_url` in a browser and pay there. "
+        "The order becomes `paid` when Stripe confirms the payment. "
+        "Calling this again while the page is still open returns the same "
+        "page, so one order never has two pages to pay on. The prices of the "
+        "order must still be the current prices of its movies. "
+        f"Payments are in {gateway.CURRENCY.upper()}, from "
+        f"{gateway.MIN_PAYMENT} to {gateway.MAX_PAYMENT}."
+    ),
+    responses={
+        **AUTH_ERRORS,
+        status.HTTP_404_NOT_FOUND: {"description": "You have no order with this id."},
+        status.HTTP_409_CONFLICT: {
+            "description": "The order can't be paid now: it is paid or "
+            "canceled, a price has changed, the total is outside the limits, "
+            "or it has just been paid. The message says which."
+        },
+        status.HTTP_502_BAD_GATEWAY: {
+            "description": "Stripe didn't answer or refused; nothing changed."
+        },
+    },
+)
+async def checkout_order(
+    order_id: PathId, user: CurrentUser, db: DbSession
+) -> CheckoutResponse:
+    try:
+        order = await crud.lock_order_for_payment(db, order_id, user.id)
+    except crud.OrderNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=ORDER_NOT_FOUND
+        )
+    except crud.OrderNotPendingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=NOT_PAYABLE[exc.status]
+        )
+    except crud.PricesChangedError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=PRICES_CHANGED)
+    except crud.AmountTooSmallError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=AMOUNT_TOO_SMALL
+        )
+    except crud.AmountTooLargeError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=AMOUNT_TOO_LARGE
+        )
+
+    # The order stays locked until the end of this request.
+    try:
+        if order.checkout_session_id is not None:
+            session = await gateway.get_checkout_session(order.checkout_session_id)
+            if session.status == "open":
+                await db.rollback()
+                return CheckoutResponse(checkout_url=session.url)
+            if session.status == "complete":
+                # Paid on Stripe, but the webhook hasn't marked the order yet.
+                await db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail=PAYMENT_IN_PROGRESS
+                )
+            # "expired": that page can't be paid any more, open a new one.
+        session = await gateway.create_checkout_session(order, user.email)
+    except gateway.PaymentGatewayError:
+        # The user gets a short answer; the real reason is in the log.
+        logger.exception("Stripe request failed for order %s", order_id)
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=GATEWAY_UNAVAILABLE
+        )
+    await crud.save_checkout_session(db, order.id, session.id)
+    return CheckoutResponse(checkout_url=session.url)

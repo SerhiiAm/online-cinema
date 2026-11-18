@@ -1,8 +1,14 @@
-"""Fixtures shared by the movies, carts and orders tests."""
+"""Fixtures shared by the movies, carts, orders and payments tests."""
+
+import asyncio
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
+import stripe
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from stripe.checkout import SessionService
 
 from app.models.accounts import UserGroupEnum
 from app.models.movies import Certification, Director, Genre, Star
@@ -51,6 +57,89 @@ async def moderator_token(db_session: AsyncSession, user_token: str) -> str:
 async def admin_token(db_session: AsyncSession, user_token: str) -> str:
     await set_group(db_session, UserGroupEnum.ADMIN)
     return user_token
+
+
+class FakeStripe:
+    """Stands in for Stripe's Checkout Sessions API.
+
+    Our own code that builds the requests still runs; `created` keeps what
+    it sent, `sessions` what "Stripe" knows (a test may change a status).
+    """
+
+    def __init__(self) -> None:
+        self.created: list[dict[str, Any]] = []
+        self.sessions: dict[str, SimpleNamespace] = {}
+        # Set to a stripe.StripeError to make every call fail with it.
+        self.error: Exception | None = None
+        # A pause inside "create", to let a parallel request catch up.
+        self.delay = 0.0
+
+    async def create(self, params: dict[str, Any], options: object = None):
+        if self.error is not None:
+            raise self.error
+        await asyncio.sleep(self.delay)
+        self.created.append(params)
+        number = len(self.created)
+        session = SimpleNamespace(
+            id=f"cs_test_{number}",
+            url=f"https://checkout.stripe.test/{number}",
+            status="open",
+            payment_status="unpaid",
+            client_reference_id=params["client_reference_id"],
+            amount_total=sum(
+                line["price_data"]["unit_amount"] for line in params["line_items"]
+            ),
+            currency=params["line_items"][0]["price_data"]["currency"],
+            payment_intent=None,
+        )
+        self.sessions[session.id] = session
+        return session
+
+    def pay(self, session_id: str) -> None:
+        """The customer pays on the page, as Stripe would record it."""
+        session = self.sessions[session_id]
+        session.status = "complete"
+        session.payment_status = "paid"
+        session.payment_intent = session_id.replace("cs_", "pi_")
+
+    async def retrieve(self, session_id: str, params: object = None,
+                       options: object = None):
+        if self.error is not None:
+            raise self.error
+        if session_id not in self.sessions:
+            # What the real Stripe answers (checked on the sandbox).
+            raise stripe.InvalidRequestError(
+                f"No such checkout.session: {session_id}",
+                "id",
+                code="resource_missing",
+                http_status=404,
+            )
+        return self.sessions[session_id]
+
+    async def expire(self, session_id: str, params: object = None,
+                     options: object = None):
+        session = await self.retrieve(session_id)
+        if session.status != "open":
+            # What the real Stripe answers (checked on the sandbox).
+            raise stripe.InvalidRequestError(
+                'Only Checkout Sessions with a status in ["open"] can be '
+                f"expired. This Checkout Session has a status of "
+                f"`{session.status}`.",
+                None,
+                http_status=400,
+            )
+        session.status = "expired"
+        return session
+
+
+@pytest.fixture
+def fake_stripe(monkeypatch: pytest.MonkeyPatch) -> FakeStripe:
+    fake = FakeStripe()
+    for name in ("create", "retrieve", "expire"):
+        monkeypatch.setattr(
+            SessionService, f"{name}_async", staticmethod(getattr(fake, name))
+        )
+    return fake
 
 
 @pytest.fixture

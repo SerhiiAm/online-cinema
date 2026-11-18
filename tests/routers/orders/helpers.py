@@ -71,6 +71,18 @@ async def cancel_order(client: AsyncClient, token: str, order_id: int) -> Respon
     return await client.post(f"/orders/{order_id}/cancel", headers=auth(token))
 
 
+async def checkout(client: AsyncClient, token: str, order_id: int) -> Response:
+    return await client.post(f"/orders/{order_id}/checkout", headers=auth(token))
+
+
+async def checkout_session_of(db: AsyncSession, order_id: int) -> str | None:
+    """The Stripe session id saved on the order."""
+    await db.rollback()  # see what other sessions committed
+    return await db.scalar(
+        select(Order.checkout_session_id).where(Order.id == order_id)
+    )
+
+
 async def status_of(db: AsyncSession, order_id: int) -> OrderStatusEnum:
     """The order's status as it is saved in the DB."""
     await db.rollback()  # see what other sessions committed

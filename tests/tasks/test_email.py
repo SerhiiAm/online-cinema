@@ -5,7 +5,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.core.config import settings
-from app.tasks.email import send_activation_email, send_password_reset_email
+from app.tasks.email import (
+    send_activation_email,
+    send_password_reset_email,
+    send_payment_email,
+)
 
 EMAIL = "user+test@example.com"
 TOKEN = "test-token"
@@ -62,3 +66,15 @@ def test_send_password_reset_email_builds_message(smtp_mock: MagicMock) -> None:
     assert expected_link in body
     assert f"Reset token: {TOKEN}" in body
     assert f"{settings.password_reset_token_expire_minutes} minutes" in body
+
+
+def test_send_payment_email_builds_message(smtp_mock: MagicMock) -> None:
+    send_payment_email(EMAIL, 3, "19.98 PLN", ["Inception", "Tenet"])
+
+    message = sent_message(smtp_mock)
+    assert message["To"] == EMAIL
+    assert message["Subject"] == "Order #3 is paid"
+
+    body = message.get_content()
+    assert "Order #3 is paid: 19.98 PLN." in body
+    assert "Your movies:\n- Inception\n- Tenet" in body
