@@ -1,14 +1,17 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import ColumnElement, delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud.orders import ORDER_DETAILS, OrderNotFoundError, OrderNotPendingError
+from app.crud.pagination import page_of
+from app.crud.search import within_days
 from app.models.accounts import User
 from app.models.carts import Cart, CartItem
 from app.models.orders import Order, OrderStatusEnum
 from app.models.payments import Payment, PaymentItem
+from app.schemas.payments import PaymentListQuery
 
 
 class PaymentAmountMismatchError(Exception):
@@ -115,3 +118,37 @@ async def _pay_order(
     )
     await db.commit()
     return paid
+
+
+async def _payments_page(
+    db: AsyncSession, conditions: list[ColumnElement[bool]], page: int
+) -> tuple[list[Payment], int]:
+    """One page of the matching payments, newest first, and how many of
+    them there are on all pages."""
+    total = await db.scalar(
+        select(func.count()).select_from(Payment).where(*conditions)
+    )
+    payments = await db.scalars(
+        # Ids grow in the order of creation, and are never equal.
+        page_of(select(Payment).where(*conditions).order_by(Payment.id.desc()), page)
+    )
+    return list(payments), total
+
+
+async def list_user_payments(
+    db: AsyncSession, user_id: int, page: int
+) -> tuple[list[Payment], int]:
+    return await _payments_page(db, [Payment.user_id == user_id], page)
+
+
+async def list_all_payments(
+    db: AsyncSession, query: PaymentListQuery
+) -> tuple[list[Payment], int]:
+    """The payments of all users that match the filters (for admins)."""
+    conditions = []
+    if query.user_id is not None:
+        conditions.append(Payment.user_id == query.user_id)
+    if query.status is not None:
+        conditions.append(Payment.status == query.status)
+    conditions += within_days(Payment.created_at, query.date_from, query.date_to)
+    return await _payments_page(db, conditions, query.page)

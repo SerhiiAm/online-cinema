@@ -8,15 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import payment_gateway as gateway
 from app.core.database import get_db
-from app.core.dependencies import MAX_DB_ID
+from app.core.dependencies import MAX_DB_ID, AdminUser, CurrentUser
 from app.crud import payments as crud
 from app.crud.orders import OrderNotFoundError, OrderNotPendingError
 from app.models.orders import OrderStatusEnum
+from app.routers.carts import AUTH_ERRORS
 from app.routers.orders import GATEWAY_UNAVAILABLE
 from app.schemas.movies import DbId
+from app.schemas.pagination import PAGE_SIZE, Page, PageNumber
 from app.schemas.payments import (
+    AdminPaymentResponse,
     CheckoutSessionId,
     PaymentCanceledResponse,
+    PaymentListQuery,
+    PaymentResponse,
     PaymentResultResponse,
     WebhookResponse,
 )
@@ -237,4 +242,53 @@ async def payment_canceled(
 ) -> PaymentCanceledResponse:
     return PaymentCanceledResponse(
         order_id=order_id, message=PAYMENT_NOT_COMPLETED.format(order_id=order_id)
+    )
+
+
+@router.get(
+    "",
+    summary="List your payments",
+    description=(
+        "Your payments, newest first, each with its date and time, amount "
+        f"({gateway.CURRENCY.upper()}), status and the order it paid. "
+        "A payment is saved when Stripe confirms it, so the status is "
+        f"`successful`. {PAGE_SIZE} per page; `total` counts all your "
+        "payments. A page after the last one is empty."
+    ),
+    responses=AUTH_ERRORS,
+)
+async def list_payments(
+    user: CurrentUser, db: DbSession, page: Annotated[PageNumber, Query()] = 1
+) -> Page[PaymentResponse]:
+    payments, total = await crud.list_user_payments(db, user.id, page)
+    return Page[PaymentResponse].model_validate(
+        {"items": payments, "total": total, "page": page}, from_attributes=True
+    )
+
+
+@router.get(
+    "/all",
+    summary="List the payments of all users (admin)",
+    description=(
+        "Every payment with its `user_id`, newest first, "
+        f"{PAGE_SIZE} per page. Filters are optional and can be combined: "
+        "`user_id`, `status` (`successful`, `canceled` or `refunded`; only "
+        "`successful` is used for now) and the days `date_from` / `date_to` "
+        "(`YYYY-MM-DD`, both included). Days are counted in UTC, like the "
+        "times in the answer. A filter that matches nothing (an unknown "
+        "user, `date_from` after `date_to`) gives an empty page."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: AUTH_ERRORS[status.HTTP_401_UNAUTHORIZED],
+        status.HTTP_403_FORBIDDEN: {
+            "description": "You are not an admin, or the account is inactive."
+        },
+    },
+)
+async def list_all_payments(
+    query: Annotated[PaymentListQuery, Query()], admin: AdminUser, db: DbSession
+) -> Page[AdminPaymentResponse]:
+    payments, total = await crud.list_all_payments(db, query)
+    return Page[AdminPaymentResponse].model_validate(
+        {"items": payments, "total": total, "page": query.page}, from_attributes=True
     )

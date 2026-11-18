@@ -1,5 +1,4 @@
 from collections.abc import Sequence
-from datetime import UTC, datetime, time
 from decimal import Decimal
 
 from sqlalchemy import ColumnElement, Row, func, insert, select, update
@@ -8,6 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.payment_gateway import MAX_PAYMENT, MIN_PAYMENT
 from app.crud.pagination import page_of
+from app.crud.search import within_days
 from app.models.carts import Cart, CartItem
 from app.models.movies import Movie
 from app.models.orders import Order, OrderItem, OrderStatusEnum
@@ -285,12 +285,5 @@ async def list_all_orders(
         conditions.append(Order.user_id == query.user_id)
     if query.status is not None:
         conditions.append(Order.status == query.status)
-    # Whole days in UTC, both included: from 00:00:00 of the first day to
-    # the last microsecond of the last one (the DB stores microseconds too).
-    if query.date_from is not None:
-        start = datetime.combine(query.date_from, time.min, UTC)
-        conditions.append(Order.created_at >= start)
-    if query.date_to is not None:
-        end = datetime.combine(query.date_to, time.max, UTC)
-        conditions.append(Order.created_at <= end)
+    conditions += within_days(Order.created_at, query.date_from, query.date_to)
     return await _orders_page(db, conditions, query.page)

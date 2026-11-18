@@ -4,13 +4,17 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime
 
 from httpx import AsyncClient, Response
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.payments import Payment, PaymentItem
+from app.models.orders import Order, OrderStatusEnum
+from app.models.payments import Payment, PaymentItem, PaymentStatusEnum
+from tests.routers.movies.helpers import auth
+from tests.routers.orders.helpers import save_order
 
 
 def sign(
@@ -83,3 +87,39 @@ async def get_payments(db: AsyncSession) -> list[Payment]:
 async def get_payment_items(db: AsyncSession) -> list[PaymentItem]:
     await db.rollback()
     return list(await db.scalars(select(PaymentItem).order_by(PaymentItem.id)))
+
+
+async def save_payment(
+    db: AsyncSession,
+    user_id: int,
+    movie_id: int,
+    status: PaymentStatusEnum = PaymentStatusEnum.SUCCESSFUL,
+    created_at: str | None = None,
+) -> int:
+    """Saves a paid order of one movie (9.99) and its payment straight into
+    the DB; `created_at` (ISO) dates the payment. Returns the payment id.
+
+    For states the API can't produce (other statuses, past dates)."""
+    order_id = await save_order(db, user_id, [movie_id], OrderStatusEnum.PAID)
+    amount = await db.scalar(select(Order.total_amount).where(Order.id == order_id))
+    values = {
+        "user_id": user_id,
+        "order_id": order_id,
+        "amount": amount,
+        "status": status,
+    }
+    if created_at is not None:
+        values["created_at"] = datetime.fromisoformat(created_at)
+    payment_id = await db.scalar(insert(Payment).values(values).returning(Payment.id))
+    await db.commit()
+    return payment_id
+
+
+async def list_payments(client: AsyncClient, token: str, **params: str) -> Response:
+    return await client.get("/payments", params=params, headers=auth(token))
+
+
+async def list_all_payments(
+    client: AsyncClient, token: str, **filters: str
+) -> Response:
+    return await client.get("/payments/all", params=filters, headers=auth(token))
